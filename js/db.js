@@ -3,8 +3,8 @@
 // before the UI says "logged".
 
 const DB_NAME = 'liftlog';
-const DB_VERSION = 1;
-export const STORES = ['exercises', 'workouts', 'sets', 'meta'];
+const DB_VERSION = 2;
+export const STORES = ['exercises', 'workouts', 'sets', 'meta', 'body', 'prs'];
 
 let dbPromise;
 
@@ -12,19 +12,32 @@ function open() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    // Upgrades run step by step from whatever version is on the phone; existing data is kept.
+    req.onupgradeneeded = (ev) => {
       const db = req.result;
-      const ex = db.createObjectStore('exercises', { keyPath: 'id' });
-      ex.createIndex('name', 'name');
-      const wo = db.createObjectStore('workouts', { keyPath: 'id' });
-      wo.createIndex('startedAt', 'startedAt');
-      const st = db.createObjectStore('sets', { keyPath: 'id' });
-      st.createIndex('workoutId', 'workoutId');
-      st.createIndex('exerciseId', 'exerciseId');
-      st.createIndex('loggedAt', 'loggedAt');
-      db.createObjectStore('meta', { keyPath: 'key' });
+      if (ev.oldVersion < 1) {
+        const ex = db.createObjectStore('exercises', { keyPath: 'id' });
+        ex.createIndex('name', 'name');
+        const wo = db.createObjectStore('workouts', { keyPath: 'id' });
+        wo.createIndex('startedAt', 'startedAt');
+        const st = db.createObjectStore('sets', { keyPath: 'id' });
+        st.createIndex('workoutId', 'workoutId');
+        st.createIndex('exerciseId', 'exerciseId');
+        st.createIndex('loggedAt', 'loggedAt');
+        db.createObjectStore('meta', { keyPath: 'key' });
+      }
+      if (ev.oldVersion < 2) {
+        // body: weight / body-fat / measurement entries over time
+        db.createObjectStore('body', { keyPath: 'id' }).createIndex('date', 'date');
+        // prs: personal records entered by hand (set-shaped, plus manual: true)
+        db.createObjectStore('prs', { keyPath: 'id' }).createIndex('exerciseId', 'exerciseId');
+      }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => db.close(); // let a newer version of the app upgrade
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
   return dbPromise;

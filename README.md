@@ -2,7 +2,7 @@
 
 A fast, offline workout tracker that installs to your phone's home screen. You log exercises as sets of weight × reps, and every set is timestamped. All data stays on your device in IndexedDB. There's no account and no server.
 
-Plain HTML/CSS/JS with no build step and no dependencies.
+Plain HTML/CSS/JS with no build step. The one dependency is [Three.js](https://threejs.org) for the 3D body map, loaded from a pinned CDN URL the first time you open the Body tab and cached for offline use after that.
 
 ```
 index.html            app shell + bottom nav
@@ -12,16 +12,21 @@ css/app.css           styles
 js/db.js              tiny IndexedDB wrapper
 js/data.js            seed exercises, queries, formatting, backup
 js/app.js             screens and interactions
+js/body3d.js          3D muscle figure (Three.js)
+js/muscles.js         muscle groups: exercises and stretches
 icons/                app icons (regenerate: python3 tools/make_icons.py)
+tools/serve.py        local dev server with caching turned off
 ```
 
 ## Run it locally
 
-Any static file server works. From this folder:
+From this folder:
 
 ```bash
-python3 -m http.server 5173
+python3 tools/serve.py
 ```
+
+It's a static file server that turns off browser caching, so your edits show up when you reload. Plain `python3 -m http.server` also works, but the browser may keep serving old JavaScript files.
 
 Then open http://localhost:5173. Service workers only run on `localhost` or HTTPS, so opening `index.html` as a file won't work.
 
@@ -84,6 +89,9 @@ Your workouts exist **only on that phone**. Deleting the app, clearing Safari or
 - **Logging:** the weight and reps prefill from your last set of that exercise today, or from the first set of your last session. Use the big **−/+** buttons (weight step is set in Settings) or tap a number to type it. **Repeat** logs the previous set again with one tap. Your phone vibrates on Android; iOS doesn't support web vibration.
 - **Timed exercises** (planks, running, Stairmaster…): each exercise is recorded as *Weight × reps*, *Time*, or *Time + distance*. When you create a new exercise in the picker, choose the type (the app guesses one from the name); change it later under **Exercises → (exercise) → Edit**. Type a time as `1:30`, or a bare number (seconds for Time exercises, minutes for Time + distance). **▶ Start timer** runs a stopwatch: for Time exercises, stopping it logs the set; for Time + distance it fills in the time so you can add the distance. Distance is in miles when units are lb, and kilometers when units are kg.
 - **Rate the workout:** after **Finish**, tap an effort level (1–10) and how you felt (Awful → Great). Both save as soon as you tap, show on the History card, can be changed later on the workout's detail page, and are included in the CSV export.
+- **Body tab:** a 3D figure you can spin (drag), zoom (pinch or scroll) and move (two-finger drag). Tap a muscle, or a name in the row along the bottom, to see exercises that work it and two stretches. The exercise list includes your own exercises whose names match (e.g. "Tricep Push Down Triangle" under Triceps). During a workout, **＋** adds an exercise to it.
+- **Progress tab:** **Log stats** records weight, body fat and optional measurements (waist, chest, arms, thighs, hips), plus your height. It shows BMI, the change since your first entry, and a weight chart. **Personal records** lists your best set for every exercise, worked out from your logs. **Add PR** lets you enter records from before you used the app; they count toward PR badges and show on that exercise's page. **All exercises** (the old Exercises tab) is at the bottom.
+- **Settings → Display:** if the bottom bar doesn't sit at the very bottom of your phone's screen, try each option there. It also shows your screen measurements and the app version, which helps with troubleshooting.
 - **Edit or delete a set:** tap it to edit, or swipe it left to delete (with Undo).
 - **"Last time: 185 × 8, 8, 6 (Nov 18)"** under each exercise shows what to beat. A **PR** badge appears when a set beats your best estimated 1RM from before today.
 - **Estimated 1RM** uses Epley: `weight × (1 + reps / 30)`. A single rep counts as its own 1RM.
@@ -96,6 +104,8 @@ Your workouts exist **only on that phone**. Deleting the app, clearing Safari or
 | `exercises` | id, name, category, type (weight / time / cardio), createdAt, builtin? |
 | `workouts` | id, startedAt, endedAt, notes, effort (1–10), feeling (1–5), exerciseOrder[] |
 | `sets` | id, workoutId, exerciseId, weight, reps, unit, loggedAt, order; timed sets add duration (sec), distance, distUnit |
-| `meta` | settings, seeded flag |
+| `body` | id, date, weight, unit, bodyFat, lenUnit, waist, chest, arms, thighs, hips |
+| `prs` | hand-entered records: same fields as a set, plus manual: true and note |
+| `meta` | settings, profile (heightCm), seeded flag |
 
 Timestamps are ISO-8601 strings. Built-in exercises have stable ids (`ex_bench-press`), so backups from different devices merge without creating duplicates.
