@@ -28,6 +28,7 @@ const state = {
   drafts: {},                          // exerciseId -> { w, r } or { d, dist } pending values in the logger
   timer: null,                         // { exId, start } stopwatch for a timed exercise
   historyFilter: '',
+  calMonth: null,                      // 'YYYY-MM' shown in the History calendar; null = this month
   exFilter: '',
 };
 const setActive = (id) => { state.activeId = id; ss.set('activeWorkoutId', id); };
@@ -460,15 +461,160 @@ function ratingLine(w) {
 // HISTORY
 // ======================================================================
 async function viewHistory() {
+  const mode = histMode();
   return `<h1>History</h1>
+    <div class="seg" style="margin-bottom:12px">
+      <button class="${mode === 'list' ? 'on' : ''}" data-action="hist-mode" data-m="list">List</button>
+      <button class="${mode === 'calendar' ? 'on' : ''}" data-action="hist-mode" data-m="calendar">Calendar</button>
+    </div>
+    ${mode === 'calendar' ? '<div id="cal"></div>' : `
     <input class="search" id="hist-q" type="search" placeholder="Filter by exercise" value="${esc(state.historyFilter)}" autocomplete="off">
-    <div id="hist-list"></div>`;
+    <div id="hist-list"></div>`}`;
 }
 afterRender.history = () => {
+  if (histMode() === 'calendar') return drawCalendar();
   const q = $('#hist-q');
   q.addEventListener('input', () => { state.historyFilter = q.value; drawHistory(); });
   drawHistory();
 };
+const histMode = () => (ls.get('historyMode') === 'calendar' ? 'calendar' : 'list');
+
+// ---------- calendar ----------
+// Each workout day is labelled by the muscles it trained most. A set counts for every
+// muscle its exercise works (same exercise-to-muscle mapping as the Body tab).
+const GROUPS = [
+  { id: 'push', name: 'Push', color: '#ff8a3d', muscles: ['chest', 'shoulders', 'triceps'] },
+  { id: 'pull', name: 'Pull', color: '#3987e5', muscles: ['lats', 'upperback', 'biceps', 'traps', 'forearms', 'lowerback'] },
+  { id: 'legs', name: 'Legs', color: '#b07cff', muscles: ['quads', 'hamstrings', 'glutes', 'calves', 'adductors', 'hipflexors'] },
+  { id: 'core', name: 'Core', color: '#2ec4b6', muscles: ['abs', 'obliques'] },
+];
+const GROUP_OF = Object.fromEntries(GROUPS.flatMap((g) => g.muscles.map((m) => [m, g])));
+const MIXED = { upper: { name: 'Upper body', color: '#e5c339' }, full: { name: 'Full body', color: '#d4ff3a' }, other: { name: 'Workout', color: '#8a94a3' } };
+const localDay = (iso) => new Date(iso).toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
+
+function musclesForExercises(ex) { // exerciseId -> [muscleId]
+  const idx = new Map();
+  const add = (exId, m) => { if (!idx.has(exId)) idx.set(exId, []); if (!idx.get(exId).includes(m)) idx.get(exId).push(m); };
+  for (const m of MUSCLES) {
+    m.exercises.forEach((id) => ex.has(id) && add(id, m.id));
+    for (const e of ex.values()) if (!e.builtin && m.match?.test(e.name) && !m.exclude?.test(e.name)) add(e.id, m.id);
+  }
+  return idx;
+}
+
+// Summarise a list of sets: muscle scores, the day's label and its colour.
+function summarizeSets(sets, idx) {
+  const score = new Map();
+  for (const s of sets) {
+    const ms = idx.get(s.exerciseId);
+    if (!ms?.length) continue;
+    ms.forEach((m) => score.set(m, (score.get(m) || 0) + 1));
+  }
+  const total = [...score.values()].reduce((a, b) => a + b, 0);
+  const muscles = [...score].sort((a, b) => b[1] - a[1]).map(([id, n]) => ({ id, name: musclesById[id].name, n, share: n / total }));
+  if (!total) return { muscles, total, kind: MIXED.other, top: null };
+  const byGroup = new Map();
+  muscles.forEach((m) => { const g = GROUP_OF[m.id]; byGroup.set(g, (byGroup.get(g) || 0) + m.n); });
+  const [[topGroup, topN]] = [...byGroup].sort((a, b) => b[1] - a[1]);
+  let kind = topGroup;
+  if (topN / total < 0.6) {
+    const upper = (byGroup.get(GROUPS[0]) || 0) + (byGroup.get(GROUPS[1]) || 0);
+    kind = upper / total >= 0.75 ? MIXED.upper : MIXED.full;
+  }
+  return { muscles, total, kind, top: muscles[0] };
+}
+
+async function calendarData() {
+  const [workouts, ex, sets] = await Promise.all([allWorkouts(), exercisesMap(), db.all('sets')]);
+  const idx = musclesForExercises(ex);
+  const wDay = new Map(workouts.map((w) => [w.id, localDay(w.startedAt)]));
+  const days = new Map(); // YYYY-MM-DD -> { workouts: [], sets: [] }
+  const day = (k) => { if (!days.has(k)) days.set(k, { workouts: [], sets: [] }); return days.get(k); };
+  workouts.forEach((w) => day(wDay.get(w.id)).workouts.push(w));
+  sets.forEach((s) => { const k = wDay.get(s.workoutId); if (k) day(k).sets.push(s); });
+  return { days, idx, ex };
+}
+
+async function drawCalendar() {
+  const now = new Date();
+  const thisMonth = now.toLocaleDateString('en-CA').slice(0, 7);
+  const ym = state.calMonth || thisMonth;
+  const [y, mo] = ym.split('-').map(Number);
+  const { days, idx } = await calendarData();
+  const first = new Date(y, mo - 1, 1);
+  const nDays = new Date(y, mo, 0).getDate();
+  const today = localDay(now.toISOString());
+  const weekdays = [...Array(7)].map((_, i) => new Date(2024, 0, 7 + i).toLocaleDateString(undefined, { weekday: 'narrow' }));
+
+  let cells = '';
+  for (let i = 0; i < first.getDay(); i++) cells += '<div class="cal-cell empty"></div>';
+  const monthSets = [];
+  let nWorkoutDays = 0;
+  for (let d = 1; d <= nDays; d++) {
+    const key = `${ym}-${String(d).padStart(2, '0')}`;
+    const info = days.get(key);
+    const cls = `cal-cell${key === today ? ' today' : ''}`;
+    if (!info) { cells += `<div class="${cls}"><span class="cal-num">${d}</span></div>`; continue; }
+    nWorkoutDays++;
+    monthSets.push(...info.sets);
+    const sum = summarizeSets(info.sets, idx);
+    const label = sum.top ? sum.muscles.slice(0, 2).map((m) => m.name).join(', ') : sum.kind.name;
+    cells += `<button class="${cls} done" style="--c:${sum.kind.color}" data-action="cal-day" data-d="${key}"
+        aria-label="${esc(first.toLocaleDateString(undefined, { month: 'long' }))} ${d}: ${esc(sum.kind.name)}, mostly ${esc(label)}">
+        <span class="cal-num">${d}</span><span class="cal-tag">${esc(sum.kind.name.replace(' body', ''))}</span></button>`;
+  }
+
+  const month = summarizeSets(monthSets, idx);
+  const usedKinds = new Map();
+  for (const [k, info] of days) if (k.startsWith(ym)) { const s = summarizeSets(info.sets, idx); usedKinds.set(s.kind.name, s.kind.color); }
+  const legend = [...usedKinds].map(([n, c]) => `<span class="cal-key"><i style="background:${c}"></i>${esc(n)}</span>`).join('');
+
+  $('#cal').innerHTML = `
+    <div class="row cal-head">
+      <button class="btn ghost" data-action="cal-move" data-step="-1" aria-label="Previous month">‹</button>
+      <div class="grow cal-title">${first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div>
+      <button class="btn ghost" data-action="cal-move" data-step="1" aria-label="Next month" ${ym >= thisMonth ? 'disabled' : ''}>›</button>
+    </div>
+    <div class="cal-grid">${weekdays.map((w) => `<div class="cal-wd">${w}</div>`).join('')}${cells}</div>
+    ${legend ? `<div class="cal-legend">${legend}</div>` : ''}
+    <div class="card" style="margin-top:12px">
+      ${nWorkoutDays
+        ? `<div class="card-title">${nWorkoutDays} workout day${nWorkoutDays === 1 ? '' : 's'}</div>
+           ${month.muscles.length ? `<div class="muted small">Most trained: ${month.muscles.slice(0, 3).map((m) => esc(m.name)).join(', ')}</div>
+           ${muscleBars(month.muscles.slice(0, 6))}` : ''}`
+        : '<div class="muted">No workouts this month.</div>'}
+    </div>
+    ${ym !== thisMonth ? '<button class="btn block" data-action="cal-move" data-step="0" style="margin-top:12px">Back to this month</button>' : ''}`;
+}
+
+function muscleBars(muscles) {
+  const max = muscles[0]?.n || 1;
+  return `<div class="cal-bars">${muscles.map((m) => `
+    <div class="cal-bar"><span>${esc(m.name)}</span>
+      <div class="cal-track"><i style="width:${Math.round((m.n / max) * 100)}%;background:${GROUP_OF[m.id].color}"></i></div>
+      <b>${m.n}</b></div>`).join('')}</div>`;
+}
+
+async function openCalendarDay(key) {
+  const { days, idx, ex } = await calendarData();
+  const info = days.get(key);
+  if (!info) return;
+  const sum = summarizeSets(info.sets, idx);
+  const date = new Date(`${key}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const cards = info.workouts.map((w) => {
+    const ws = info.sets.filter((s) => s.workoutId === w.id);
+    const names = [...new Set(ws.map((s) => ex.get(s.exerciseId)?.name).filter(Boolean))];
+    return `<a class="card" href="#/w/${w.id}" data-action="close-sheet">
+      <div class="card-title">${fmtTime(w.startedAt)}${w.endedAt ? ` – ${fmtTime(w.endedAt)}` : ''}</div>
+      <div class="muted small">${ws.length} set${ws.length === 1 ? '' : 's'} · ${names.map(esc).join(', ') || 'No sets'}</div></a>`;
+  }).join('');
+  openSheet(`
+    <div class="row"><h2 class="grow" style="margin:0">${esc(date)}</h2><button class="btn ghost" data-action="close-sheet">Close</button></div>
+    <div style="margin-top:6px"><span class="pill" style="background:${sum.kind.color}">${esc(sum.kind.name)}</span>
+      ${sum.muscles.length ? `<span class="muted small">&nbsp;mostly ${sum.muscles.slice(0, 3).map((m) => esc(m.name)).join(', ')}</span>` : ''}</div>
+    ${sum.muscles.length ? `<h3>Sets per muscle</h3>${muscleBars(sum.muscles)}` : '<p class="muted small">None of these exercises map to a muscle group yet.</p>'}
+    <h3>Workouts</h3>${cards}`, { tall: true });
+}
 async function drawHistory() {
   const [workouts, ex, sets] = await Promise.all([allWorkouts(), exercisesMap(), db.all('sets')]);
   const byW = new Map();
@@ -1058,6 +1204,18 @@ const stamp = () => new Date().toLocaleDateString('en-CA');
 // ACTIONS (one delegated click handler)
 // ======================================================================
 const actions = {
+  // history
+  'hist-mode': (el) => { ls.set('historyMode', el.dataset.m); render(); },
+  'cal-move': (el) => {
+    const step = Number(el.dataset.step);
+    if (!step) state.calMonth = null;
+    else {
+      const [y, m] = (state.calMonth || new Date().toLocaleDateString('en-CA').slice(0, 7)).split('-').map(Number);
+      state.calMonth = new Date(y, m - 1 + step, 1).toLocaleDateString('en-CA').slice(0, 7);
+    }
+    drawCalendar();
+  },
+  'cal-day': (el) => openCalendarDay(el.dataset.d),
   // progress
   'log-body': () => openBodySheet(),
   'edit-body': (el) => openBodySheet(el.dataset.id),
@@ -1340,7 +1498,7 @@ window.addEventListener('hashchange', () => { closeSheet(); render(); view().scr
 // ---------- bottom-bar fit (see Settings → Display) ----------
 // iOS home-screen apps can under-report the viewport height by the status bar,
 // leaving a gap under the nav. The user can pick which workaround looks right.
-export const APP_VERSION = 'v6';
+export const APP_VERSION = 'v7';
 const FIT_MODES = { auto: 'Auto', standard: 'Off', screen: 'Stretch A', inset: 'Stretch B', fill: 'Fill' };
 const ls = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },

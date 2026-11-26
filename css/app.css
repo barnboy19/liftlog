@@ -287,3 +287,28 @@ input.text { width: 100%; height: var(--tap); border-radius: var(--radius); bord
 select.text { width: 100%; height: var(--tap); border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg); padding: 0 12px; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ---------- history calendar ---------- */
+.cal-head { margin-bottom: 8px; }
+.cal-head .btn { min-width: var(--tap); font-size: 24px; }
+.cal-head .btn:disabled { opacity: .3; }
+.cal-title { text-align: center; font-weight: 700; font-size: 18px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-wd { text-align: center; font-size: 12px; font-weight: 600; color: var(--muted); padding-bottom: 2px; }
+.cal-cell { aspect-ratio: 1 / 1.15; min-width: 0; border-radius: 10px; background: var(--surface); border: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 5px 2px; font: inherit; color: var(--text-2); }
+.cal-cell.empty { background: transparent; border-color: transparent; }
+.cal-cell.today { border-color: var(--accent); }
+.cal-cell.done { background: color-mix(in srgb, var(--c) 22%, var(--surface)); border-color: color-mix(in srgb, var(--c) 55%, transparent); color: var(--text); }
+.cal-cell.done.today { border-color: var(--accent); }
+.cal-cell.done:active { filter: brightness(1.2); }
+.cal-num { font-size: 14px; font-weight: 700; }
+.cal-tag { max-width: 100%; font-size: 10px; font-weight: 700; line-height: 1.1; color: var(--c); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 13px; color: var(--text-2); }
+.cal-key i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.cal-bars { display: grid; gap: 8px; margin-top: 10px; }
+.cal-bar { display: grid; grid-template-columns: 92px 1fr 34px; align-items: center; gap: 8px; font-size: 14px; }
+.cal-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.cal-bar b { text-align: right; font-weight: 650; }
+.cal-track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.cal-track i { display: block; height: 100%; border-radius: 99px; }
