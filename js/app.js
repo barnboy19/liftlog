@@ -1016,7 +1016,7 @@ async function viewSettings() {
     </div>
     <h3>Display</h3>
     <div class="card small stack">
-      <div>If the bottom bar doesn’t reach the bottom of your screen, try each option below. It changes right away.</div>
+      <div>Leave this on Auto. The other options are workarounds kept for troubleshooting; they change right away.</div>
       <div class="seg fit-seg">${Object.entries(FIT_MODES).map(([m, label]) =>
         `<button class="${(ls.get('fitMode') || 'auto') === m ? 'on' : ''}" data-action="fit-mode" data-m="${m}">${label}</button>`).join('')}</div>
       <div class="muted" id="display-info">${displayInfoText()}</div>
@@ -1331,7 +1331,7 @@ window.addEventListener('hashchange', () => { closeSheet(); render(); view().scr
 // ---------- bottom-bar fit (see Settings → Display) ----------
 // iOS home-screen apps can under-report the viewport height by the status bar,
 // leaving a gap under the nav. The user can pick which workaround looks right.
-export const APP_VERSION = 'v4';
+export const APP_VERSION = 'v5';
 const FIT_MODES = { auto: 'Auto', standard: 'Off', screen: 'Stretch A', inset: 'Stretch B', fill: 'Fill' };
 const ls = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -1342,7 +1342,8 @@ function fitScreen() {
   const root = document.documentElement;
   root.style.setProperty('--screen-h', `${screen.height}px`);
   let mode = ls.get('fitMode') || 'auto';
-  if (mode === 'auto') mode = isStandalone() && screen.height > innerHeight + 10 ? 'screen' : 'standard';
+  // Auto = no workaround: with the solid status bar the app's window already reaches the bottom edge.
+  if (mode === 'auto') mode = 'standard';
   Object.keys(FIT_MODES).forEach((m) => root.classList.toggle(`fit-${m}`, m === mode));
 }
 function displayInfo() {
@@ -1392,4 +1393,4 @@ if ('serviceWorker' in navigator) {
 }
 
 // expose for debugging in the console
-window.liftlog = { db, render, state, convert };
+window.liftlog = { db, render, state, convert, get body3d() { return body3d; } };

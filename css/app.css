@@ -255,7 +255,15 @@ a.card:active { background: var(--surface-2); }
 /* ---------- body map ---------- */
 #view.fill { padding: 0; overflow: hidden; position: relative; }
 .body3d { position: absolute; inset: 0; }
-.body-canvas { position: absolute; inset: 0; }
+.body-canvas {
+  position: absolute; inset: 0;
+  /* hologram backdrop: soft cyan glow behind the figure, faint grid */
+  background:
+    radial-gradient(ellipse 60% 45% at 50% 58%, rgba(47, 184, 255, 0.16), transparent 70%),
+    repeating-linear-gradient(0deg, rgba(47, 184, 255, 0.04) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, rgba(47, 184, 255, 0.04) 0 1px, transparent 1px 28px),
+    var(--bg);
+}
 .body-canvas canvas { display: block; }
 .body-top { position: absolute; top: 0; left: 0; right: 0; padding: calc(var(--safe-t) + 12px) 16px 0; pointer-events: none; }
 .body-top h1 { margin: 0 0 2px; }

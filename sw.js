@@ -1,5 +1,5 @@
 // Offline-first service worker. Bump VERSION whenever you deploy changed files.
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = `liftlog-${VERSION}`;
 const ASSETS = [
   './',

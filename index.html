@@ -10,7 +10,9 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="LiftLog">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- Solid (not translucent) status bar: with "black-translucent", iOS home-screen apps get a
+       window shorter than the screen by the status-bar height, leaving a gap under the nav. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
