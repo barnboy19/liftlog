@@ -12,7 +12,8 @@ css/app.css           styles
 js/db.js              tiny IndexedDB wrapper
 js/data.js            seed exercises, queries, formatting, backup
 js/app.js             screens and interactions
-js/body3d.js          3D muscle figure (Three.js)
+js/body3d.js          3D anatomy viewer (Three.js)
+models/muscles.glb    sculpted 3D muscle model (CC BY-SA 4.0, see models/LICENSE.md)
 js/muscles.js         muscle groups: exercises and stretches
 icons/                app icons (regenerate: python3 tools/make_icons.py)
 tools/serve.py        local dev server with caching turned off
@@ -98,13 +99,17 @@ Your workouts exist **only on that phone**. Deleting the app, clearing Safari or
 - **Logging:** the weight and reps prefill from your last set of that exercise today, or from the first set of your last session. Use the big **−/+** buttons (weight step is set in Settings) or tap a number to type it. **Repeat** logs the previous set again with one tap. Your phone vibrates on Android; iOS doesn't support web vibration.
 - **Timed exercises** (planks, running, Stairmaster…): each exercise is recorded as *Weight × reps*, *Time*, or *Time + distance*. When you create a new exercise in the picker, choose the type (the app guesses one from the name); change it later under **Exercises → (exercise) → Edit**. Type a time as `1:30`, or a bare number (seconds for Time exercises, minutes for Time + distance). **▶ Start timer** runs a stopwatch: for Time exercises, stopping it logs the set; for Time + distance it fills in the time so you can add the distance. Distance is in miles when units are lb, and kilometers when units are kg.
 - **Rate the workout:** after **Finish**, tap an effort level (1–10) and how you felt (Awful → Great). Both save as soon as you tap, show on the History card, can be changed later on the workout's detail page, and are included in the CSV export.
-- **Body tab:** a hologram-style 3D figure you can spin (drag), zoom (pinch or scroll) and move (two-finger drag). Tap a muscle, or a name in the row along the bottom, to see exercises that work it and two stretches. The exercise list includes your own exercises whose names match (e.g. "Tricep Push Down Triangle" under Triceps). During a workout, **＋** adds an exercise to it.
+- **Body tab:** a sculpted 3D anatomy model, coloured like an anatomy chart, that you can spin (drag), zoom (pinch or scroll) and move (two-finger drag). The model (about 2 MB) downloads the first time you open the tab and is cached for offline use after that. Tap a muscle, or a name in the row along the bottom, to see exercises that work it and two stretches. The exercise list includes your own exercises whose names match (e.g. "Tricep Push Down Triangle" under Triceps). During a workout, **＋** adds an exercise to it.
 - **Progress tab:** **Log stats** records weight, body fat and optional measurements (waist, chest, arms, thighs, hips), plus your height. It shows BMI, the change since your first entry, and a weight chart. **Personal records** lists your best set for every exercise, worked out from your logs. **Add PR** lets you enter records from before you used the app; they count toward PR badges and show on that exercise's page. **All exercises** (the old Exercises tab) is at the bottom.
 - **Settings → Display:** shows the app version and your screen measurements, which helps with troubleshooting. Leave it on **Auto**; the other options are workarounds kept for troubleshooting.
 - **Edit or delete a set:** tap it to edit, or swipe it left to delete (with Undo).
 - **"Last time: 185 × 8, 8, 6 (Nov 18)"** under each exercise shows what to beat. A **PR** badge appears when a set beats your best estimated 1RM from before today.
 - **Estimated 1RM** uses Epley: `weight × (1 + reps / 30)`. A single rep counts as its own 1RM.
 - **Units:** each set stores the unit it was logged in. Switching between lb and kg converts what's displayed and never rewrites your data.
+
+## Credits
+
+The 3D muscle model (`models/muscles.glb`) is adapted from [Z-Anatomy](https://github.com/Z-Anatomy/Models-of-human-anatomy) by Gauthier Kervyn, based on [BodyParts3D](https://dbarchive.biosciencedbc.jp/en/bodyparts3d/desc.html) (© The Database Center for Life Science), via [gymmetry-muscle-model](https://github.com/kalibismail/gymmetry-muscle-model). It's licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) and is not covered by this project's other terms; see [models/LICENSE.md](models/LICENSE.md). The app shows the same credit at the bottom of Settings.
 
 ## Data model (IndexedDB `liftlog`)
 

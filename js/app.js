@@ -948,8 +948,13 @@ afterRender.body = async () => {
   try {
     const mod = await import('./body3d.js');
     if (route().name !== 'body' || !el.isConnected) return;
-    body3d = mod.mount(el, { onSelect: (id) => openMuscle(id) });
-    $('#body-loading')?.remove();
+    const loading = $('#body-loading');
+    body3d = mod.mount(el, {
+      onSelect: (id) => openMuscle(id),
+      onProgress: (f) => { if (loading) loading.textContent = `Loading 3D model… ${Math.round(f * 100)}%`; },
+      onReady: () => loading?.remove(),
+      onError: () => { if (loading) loading.innerHTML = 'Couldn’t load the 3D model. It needs an internet connection the first time.<br>You can still pick a muscle below.'; },
+    });
   } catch (err) {
     const l = $('#body-loading');
     if (l) l.innerHTML = 'The 3D model needs an internet connection the first time it loads.<br>You can still pick a muscle below.';
@@ -1023,7 +1028,11 @@ async function viewSettings() {
     </div>
     <h3>Danger zone</h3>
     <button class="btn danger block" data-action="erase">Erase all data</button>
-    <p class="muted small" style="text-align:center;margin-top:24px">LiftLog ${APP_VERSION} · works offline · no account, no tracking</p>`;
+    <p class="muted small" style="text-align:center;margin-top:24px">LiftLog ${APP_VERSION} · works offline · no account, no tracking</p>
+    <p class="muted small" style="text-align:center">3D muscle model adapted from <a href="https://github.com/Z-Anatomy/Models-of-human-anatomy" target="_blank" rel="noopener">Z-Anatomy</a>
+      (Gauthier Kervyn) and <a href="https://dbarchive.biosciencedbc.jp/en/bodyparts3d/desc.html" target="_blank" rel="noopener">BodyParts3D</a>
+      (© DBCLS), via <a href="https://github.com/kalibismail/gymmetry-muscle-model" target="_blank" rel="noopener">gymmetry-muscle-model</a>.
+      Licensed <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>.</p>`;
 }
 function displayInfoText() {
   const i = displayInfo();
@@ -1331,7 +1340,7 @@ window.addEventListener('hashchange', () => { closeSheet(); render(); view().scr
 // ---------- bottom-bar fit (see Settings → Display) ----------
 // iOS home-screen apps can under-report the viewport height by the status bar,
 // leaving a gap under the nav. The user can pick which workaround looks right.
-export const APP_VERSION = 'v5';
+export const APP_VERSION = 'v6';
 const FIT_MODES = { auto: 'Auto', standard: 'Off', screen: 'Stretch A', inset: 'Stretch B', fill: 'Fill' };
 const ls = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
