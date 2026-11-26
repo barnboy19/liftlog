@@ -74,6 +74,15 @@ Open the deployed URL once while online. After that the app works fully offline.
 2. Tap **Install app** in the banner, or **⋮ → Add to Home screen / Install app**.
 3. Launch it from the home screen or app drawer.
 
+### If the bottom bar doesn't reach the bottom of the screen (iPhone)
+
+The app uses a solid black status bar, because with a see-through one, iOS gives home-screen apps a window shorter than the screen and leaves a gap under the bottom bar. iPhone may keep the setting from when you first added the app. If the gap is still there after updating, re-add the app:
+
+1. **Settings → Export backup (JSON)** and save the file. Removing the app from the home screen also deletes its data.
+2. Press and hold the LiftLog icon → **Remove App** → **Delete**.
+3. Open the site in Safari → Share → **Add to Home Screen**.
+4. Open it → **Settings → Import backup…** → choose the file you saved.
+
 ## Back up your data (important)
 
 Your workouts exist **only on that phone**. Deleting the app, clearing Safari or Chrome website data, or losing the phone erases them. So:
@@ -89,9 +98,9 @@ Your workouts exist **only on that phone**. Deleting the app, clearing Safari or
 - **Logging:** the weight and reps prefill from your last set of that exercise today, or from the first set of your last session. Use the big **−/+** buttons (weight step is set in Settings) or tap a number to type it. **Repeat** logs the previous set again with one tap. Your phone vibrates on Android; iOS doesn't support web vibration.
 - **Timed exercises** (planks, running, Stairmaster…): each exercise is recorded as *Weight × reps*, *Time*, or *Time + distance*. When you create a new exercise in the picker, choose the type (the app guesses one from the name); change it later under **Exercises → (exercise) → Edit**. Type a time as `1:30`, or a bare number (seconds for Time exercises, minutes for Time + distance). **▶ Start timer** runs a stopwatch: for Time exercises, stopping it logs the set; for Time + distance it fills in the time so you can add the distance. Distance is in miles when units are lb, and kilometers when units are kg.
 - **Rate the workout:** after **Finish**, tap an effort level (1–10) and how you felt (Awful → Great). Both save as soon as you tap, show on the History card, can be changed later on the workout's detail page, and are included in the CSV export.
-- **Body tab:** a 3D figure you can spin (drag), zoom (pinch or scroll) and move (two-finger drag). Tap a muscle, or a name in the row along the bottom, to see exercises that work it and two stretches. The exercise list includes your own exercises whose names match (e.g. "Tricep Push Down Triangle" under Triceps). During a workout, **＋** adds an exercise to it.
+- **Body tab:** a hologram-style 3D figure you can spin (drag), zoom (pinch or scroll) and move (two-finger drag). Tap a muscle, or a name in the row along the bottom, to see exercises that work it and two stretches. The exercise list includes your own exercises whose names match (e.g. "Tricep Push Down Triangle" under Triceps). During a workout, **＋** adds an exercise to it.
 - **Progress tab:** **Log stats** records weight, body fat and optional measurements (waist, chest, arms, thighs, hips), plus your height. It shows BMI, the change since your first entry, and a weight chart. **Personal records** lists your best set for every exercise, worked out from your logs. **Add PR** lets you enter records from before you used the app; they count toward PR badges and show on that exercise's page. **All exercises** (the old Exercises tab) is at the bottom.
-- **Settings → Display:** if the bottom bar doesn't sit at the very bottom of your phone's screen, try each option there. It also shows your screen measurements and the app version, which helps with troubleshooting.
+- **Settings → Display:** shows the app version and your screen measurements, which helps with troubleshooting. Leave it on **Auto**; the other options are workarounds kept for troubleshooting.
 - **Edit or delete a set:** tap it to edit, or swipe it left to delete (with Undo).
 - **"Last time: 185 × 8, 8, 6 (Nov 18)"** under each exercise shows what to beat. A **PR** badge appears when a set beats your best estimated 1RM from before today.
 - **Estimated 1RM** uses Epley: `weight × (1 + reps / 30)`. A single rep counts as its own 1RM.
