@@ -1,5 +1,5 @@
 // Offline-first service worker. Bump VERSION whenever you deploy changed files.
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = `liftlog-${VERSION}`;
 const ASSETS = [
   './',
@@ -22,10 +22,15 @@ const ASSETS = [
 // don't re-download it. Fetching it is best-effort: if it fails, the rest of the app
 // still installs and works offline; the Body tab retries when it's opened online.
 const LIB_CACHE = 'liftlog-lib-three-0.160.0';
+// The 2 MB muscle model gets its own cache too: fetched the first time the Body tab opens,
+// kept across app updates. Rename the cache if models/muscles.glb ever changes.
+const MODEL_CACHE = 'liftlog-model-muscles-1';
 const LIB_HOST = 'https://cdn.jsdelivr.net/npm/three@0.160.0/';
 const LIBS = [
   `${LIB_HOST}build/three.module.min.js`,
   `${LIB_HOST}examples/jsm/controls/OrbitControls.js`,
+  `${LIB_HOST}examples/jsm/loaders/GLTFLoader.js`,
+  `${LIB_HOST}examples/jsm/utils/BufferGeometryUtils.js`,
 ];
 
 self.addEventListener('install', (event) => {
@@ -40,7 +45,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys
-        .filter((k) => k.startsWith('liftlog-') && k !== CACHE && k !== LIB_CACHE)
+        .filter((k) => k.startsWith('liftlog-') && ![CACHE, LIB_CACHE, MODEL_CACHE].includes(k))
         .map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
@@ -52,6 +57,13 @@ self.addEventListener('fetch', (event) => {
   const url = req.url;
 
   // Pinned library files: cache first, store on first fetch.
+  if (url.includes('/models/')) {
+    event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+      if (res.ok) { const copy = res.clone(); caches.open(MODEL_CACHE).then((c) => c.put(req, copy)); }
+      return res;
+    })));
+    return;
+  }
   if (url.startsWith(LIB_HOST)) {
     event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(LIB_CACHE).then((c) => c.put(req, copy)); }

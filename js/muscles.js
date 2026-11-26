@@ -114,6 +114,15 @@ export const MUSCLES = [
     ],
   },
   {
+    id: 'hipflexors', name: 'Hip flexors', about: 'Iliopsoas, sartorius and TFL: lift the knee and bend at the hip.',
+    exercises: ['ex_hanging-leg-raise', 'ex_lunge', 'ex_bulgarian-split-squat', 'ex_running', 'ex_stairmaster'],
+    match: /hip flex|psoas|leg raise|knee raise|mountain climber|sartorius/i,
+    stretches: [
+      { name: 'Kneeling hip-flexor stretch', hold: H30, how: 'Half-kneel, tuck your tailbone under and shift your hips forward until the front of the back hip stretches.' },
+      { name: 'Couch stretch', hold: H30, how: 'Back knee on the floor against a wall or couch, shin up it; front foot planted. Stay tall and squeeze the back glute.' },
+    ],
+  },
+  {
     id: 'quads', name: 'Quads', about: 'Front of the thigh: straighten the knee.',
     exercises: ['ex_squat', 'ex_front-squat', 'ex_leg-press', 'ex_leg-extension', 'ex_bulgarian-split-squat', 'ex_lunge', 'ex_wall-sit', 'ex_cycling'],
     match: /quad|squat|leg press|leg extension|lunge|step.?up|wall sit/i,
