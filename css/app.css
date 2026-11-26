@@ -20,13 +20,16 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+html, body { margin: 0; background: var(--bg); color: var(--text); height: 100%; overflow: hidden; }
+/* App shell: the page itself never scrolls (so iOS can't bounce it and drag the
+   nav bar with it); only #view scrolls, and the tab bar is a normal flex row. */
 body {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
   font: 17px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-variant-numeric: tabular-nums;
   touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
-  overscroll-behavior-y: none;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -34,8 +37,9 @@ a { color: inherit; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
 #view {
-  padding: calc(var(--safe-t) + 16px) 16px calc(var(--nav-h) + var(--safe-b) + 24px);
-  max-width: 640px; margin: 0 auto; outline: none;
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  width: 100%; outline: none;
+  padding: calc(var(--safe-t) + 16px) max(16px, calc((100% - 608px) / 2)) 24px;
 }
 h1 { font-size: 28px; margin: 4px 0 12px; letter-spacing: -0.01em; }
 h2 { font-size: 20px; margin: 24px 0 8px; }
@@ -126,10 +130,31 @@ a.card:active { background: var(--surface-2); }
   width: 100%; height: 64px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg);
   text-align: center; font-size: 30px; font-weight: 800; padding: 14px 8px 0;
 }
-.field label { position: absolute; top: 6px; left: 0; right: 0; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); pointer-events: none; }
+.field input::placeholder { color: var(--muted); font-size: 18px; font-weight: 600; }
+.field label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: absolute; top: 6px; left: 0; right: 0; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); pointer-events: none; }
 .logger .actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
-.logger .actions .btn { min-height: 60px; font-size: 18px; scroll-margin-bottom: calc(var(--nav-h) + var(--safe-b) + 16px); }
+.logger .actions .btn { min-height: 60px; font-size: 18px; scroll-margin-bottom: 16px; }
 .ex-card { scroll-margin-top: 90px; }
+
+.timer-btn { min-height: 56px; font-size: 18px; }
+.timer-btn.running { background: var(--danger); border-color: var(--danger); color: #1a0000; }
+.timer-btn #sw { font-variant-numeric: tabular-nums; margin-left: 4px; }
+
+/* picker: create-as-type */
+.create-box { margin: 14px 0; padding: 12px; border: 1px dashed var(--line); border-radius: var(--radius); }
+.type-pick { display: grid; gap: 8px; margin-top: 10px; }
+
+/* post-workout ratings */
+.rate-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.rate-grid button, .feel-grid button {
+  min-height: 48px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2);
+  font-size: 18px; font-weight: 750;
+}
+.feel-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.feel-grid button { min-height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; font-weight: 700; color: var(--text-2); }
+.feel-grid .emo { font-size: 26px; line-height: 1; }
+.rate-grid button.on, .feel-grid button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.rate-caption { text-align: center; font-size: 14px; color: var(--muted); margin-top: 8px; min-height: 20px; }
 
 .collapsed-hint { padding: 0 16px 12px; font-size: 14px; color: var(--muted); }
 
@@ -184,7 +209,7 @@ a.card:active { background: var(--surface-2); }
 
 /* ---------- tabbar ---------- */
 .tabbar {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(4, 1fr);
+  flex: none; position: relative; z-index: 20; display: grid; grid-template-columns: repeat(4, 1fr);
   height: calc(var(--nav-h) + var(--safe-b)); padding-bottom: var(--safe-b);
   background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
