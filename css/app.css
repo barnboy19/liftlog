@@ -31,14 +31,13 @@ body {
   touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
 }
-/* Installed on iOS with a translucent status bar, the viewport iOS reports is
-   short by the status-bar height, so "inset: 0" stops ~47pt above the bottom
-   edge. Size the shell to the real screen instead (100vh, or the screen height
-   measured in JS, whichever is taller). */
-@media (display-mode: standalone) {
-  html, body { height: max(100vh, var(--screen-h, 0px)); }
-  body { bottom: auto; height: max(100vh, var(--screen-h, 0px)); }
-}
+/* Bottom-bar fit modes (Settings → Display). Installed iOS apps can report a
+   viewport shorter than the screen by the status-bar height, leaving a gap
+   under the nav. Each mode is a different way around it; the class is set on
+   <html> by fitScreen() in app.js. */
+html.fit-screen body { bottom: auto; height: max(100vh, var(--screen-h, 0px)); }
+html.fit-inset body { bottom: auto; height: calc(100% + env(safe-area-inset-top, 0px)); }
+html.fit-fill .tabbar::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 240px; background: inherit; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 a { color: inherit; }
@@ -217,7 +216,7 @@ a.card:active { background: var(--surface-2); }
 
 /* ---------- tabbar ---------- */
 .tabbar {
-  flex: none; position: relative; z-index: 20; display: grid; grid-template-columns: repeat(4, 1fr);
+  flex: none; position: relative; z-index: 20; display: grid; grid-template-columns: repeat(5, 1fr);
   height: calc(var(--nav-h) + var(--safe-b)); padding-bottom: var(--safe-b);
   background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
@@ -252,6 +251,33 @@ a.card:active { background: var(--surface-2); }
 #toast.show { display: flex; }
 #toast span { flex: 1; }
 #toast button { min-height: 40px; border: 0; border-radius: 10px; padding: 0 14px; background: var(--bg); color: var(--accent); font-weight: 800; }
+
+/* ---------- body map ---------- */
+#view.fill { padding: 0; overflow: hidden; position: relative; }
+.body3d { position: absolute; inset: 0; }
+.body-canvas { position: absolute; inset: 0; }
+.body-canvas canvas { display: block; }
+.body-top { position: absolute; top: 0; left: 0; right: 0; padding: calc(var(--safe-t) + 12px) 16px 0; pointer-events: none; }
+.body-top h1 { margin: 0 0 2px; }
+.body-ctrls { position: absolute; right: 12px; top: calc(var(--safe-t) + 96px); display: grid; gap: 8px; }
+.body-ctrls .btn { min-height: 44px; padding: 0 14px; font-size: 15px; background: color-mix(in srgb, var(--surface-2) 85%, transparent); }
+.body-loading { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 24px; pointer-events: none; }
+.body-chips {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 8px; overflow-x: auto; padding: 10px 16px 14px;
+  background: linear-gradient(to top, var(--bg) 60%, transparent); scrollbar-width: none;
+}
+.body-chips::-webkit-scrollbar { display: none; }
+.chip { flex: none; min-height: 44px; padding: 0 16px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); font-weight: 650; font-size: 15px; }
+.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.stretch + .stretch { margin-top: 8px; }
+.sheet.muscle-sheet > * { flex-shrink: 0; } /* scroll the sheet instead of squashing the lists */
+
+/* ---------- progress ---------- */
+.meas summary { cursor: pointer; color: var(--text-2); font-weight: 650; min-height: 44px; display: flex; align-items: center; }
+.meas-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.meas-grid label span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.fit-seg button { font-size: 13px; padding: 0 2px; }
+.tabbar a span { font-size: 11px; }
 
 textarea.notes { width: 100%; min-height: 80px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 input.text { width: 100%; height: var(--tap); border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg); padding: 0 14px; }

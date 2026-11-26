@@ -5,7 +5,9 @@ import {
   isToday, dayKey, e1rm, exercisesMap, workoutSets, allWorkouts, exerciseSessions, recentExerciseIds,
   deleteWorkout, deleteExercise, exportJson, importJson, exportCsv, eraseAll,
   TYPES, exType, guessType, isTimed, distUnit, dispDist, fmtDur, parseDur, setScore, EFFORT_LABELS, FEELINGS,
+  MEASUREMENTS, loadProfile, saveProfile, bodyEntries, lenUnit, dispLen, dispBodyW, fmtHeight, bmi, bmiLabel, personalRecords,
 } from './data.js';
+import { MUSCLES, musclesById } from './muscles.js';
 
 // ---------- tiny helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -62,16 +64,26 @@ function route() {
   const [, name = 'workout', id] = (location.hash || '#/workout').split('/');
   return { name, id: id && decodeURIComponent(id) };
 }
-const TAB_FOR = { workout: 'workout', history: 'history', w: 'history', exercises: 'exercises', e: 'exercises', settings: 'settings' };
+const TAB_FOR = {
+  workout: 'workout', history: 'history', w: 'history', body: 'body',
+  progress: 'progress', exercises: 'progress', e: 'progress', settings: 'settings',
+};
 
 let renderSeq = 0;
+let body3d = null; // live 3D viewer while on the Body tab
 async function render() {
   const seq = ++renderSeq;
   const r = route();
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === TAB_FOR[r.name]));
-  const views = { workout: viewWorkout, history: viewHistory, w: viewWorkoutDetail, exercises: viewExercises, e: viewExercise, settings: viewSettings };
+  const views = {
+    workout: viewWorkout, history: viewHistory, w: viewWorkoutDetail, body: viewBody, progress: viewProgress,
+    exercises: viewExercises, e: viewExercise, settings: viewSettings,
+  };
   const html = await (views[r.name] || viewWorkout)(r.id);
   if (seq !== renderSeq) return; // a newer render started
+  if (body3d && r.name !== 'body') { body3d.dispose(); body3d = null; }
+  if (r.name === 'body' && body3d) return; // keep the running 3D scene; nothing to re-render
+  view().classList.toggle('fill', r.name === 'body');
   view().innerHTML = html;
   afterRender[r.name]?.();
   tick();
@@ -139,6 +151,7 @@ async function viewActive(w) {
   if (!state.focusEx || !order.includes(state.focusEx)) state.focusEx = order[order.length - 1] || null;
 
   const histories = Object.fromEntries(await Promise.all(order.map(async (id) => [id, await exerciseSessions(id)])));
+  const manualPrs = await db.all('prs');
   const lastSetAt = sets.length ? sets.reduce((a, s) => (s.loggedAt > a ? s.loggedAt : a), '') : null;
 
   const cards = order.map((exId) => {
@@ -146,10 +159,11 @@ async function viewActive(w) {
     const mine = sets.filter((s) => s.exerciseId === exId);
     const prior = histories[exId].filter((h) => h.workoutId !== w.id);
     const prev = prior[0];
-    const priorBest = Math.max(0, ...prior.flatMap((h) => h.sets.map(setScore)));
-    // Flag the best set today if it beats everything before today.
+    const entered = manualPrs.filter((p) => p.exerciseId === exId);
+    const priorBest = Math.max(0, ...prior.flatMap((h) => h.sets.map(setScore)), ...entered.map(setScore));
+    // Flag the best set today if it beats everything before today (logged or entered by hand).
     let prId = null;
-    if (prior.length) {
+    if (prior.length || entered.length) {
       let best = priorBest;
       mine.forEach((s) => { const v = setScore(s); if (v > best + 0.01) { best = v; prId = s.id; } });
     }
@@ -195,14 +209,17 @@ function setRow(s, i, { pr = false, showTime = true } = {}) {
     </div></li>`;
 }
 
-function stepperHtml(field, text, label, mode, placeholder = '') {
+function stepperHtml(field, text, label, mode, placeholder = '', step = '') {
+  const st = step ? ` data-step="${step}"` : '';
   return `<div class="stepper">
-      <button data-action="step" data-field="${field}" data-dir="-1" aria-label="Decrease ${label}">−</button>
+      <button data-action="step" data-field="${field}" data-dir="-1"${st} aria-label="Decrease ${label}">−</button>
       <div class="field"><label>${label}</label>
         <input data-field="${field}" inputmode="${mode}" enterkeyhint="done" autocomplete="off" value="${esc(text)}" placeholder="${placeholder}" aria-label="${label}"></div>
-      <button data-action="step" data-field="${field}" data-dir="1" aria-label="Increase ${label}">+</button>
+      <button data-action="step" data-field="${field}" data-dir="1"${st} aria-label="Increase ${label}">+</button>
     </div>`;
 }
+// Logger scopes that hold an in-progress set for the active workout (vs. edit/entry forms).
+const isDraftScope = (s) => s && s !== 'edit' && s !== 'form';
 
 // Input fields for one set, by exercise type. `kind` drives parsing and step sizes.
 function fieldsHtml(type, d) {
@@ -523,7 +540,8 @@ afterRender.w = () => {
 // EXERCISES
 // ======================================================================
 async function viewExercises() {
-  return `<div class="row"><h1 class="grow">Exercises</h1><button class="btn" data-action="new-ex">＋ New</button></div>
+  return `<button class="btn ghost" data-action="back" data-fallback="#/progress" style="margin-left:-12px">‹ Progress</button>
+    <div class="row"><h1 class="grow">Exercises</h1><button class="btn" data-action="new-ex">＋ New</button></div>
     <input class="search" id="ex-q" type="search" placeholder="Search exercises" value="${esc(state.exFilter)}" autocomplete="off">
     <div id="ex-list"></div>`;
 }
@@ -640,6 +658,13 @@ async function viewExercise(id) {
     };
   }
   chartState = chart;
+  const manual = (await db.byIndex('prs', 'exerciseId', id)).sort((a, b) => setScore(b) - setScore(a));
+  const manualHtml = `<div class="row" style="margin-top:8px"><h3 class="grow" style="margin:8px 0">Entered PRs</h3>
+      <button class="btn" data-action="add-pr" data-ex="${id}">＋ Add PR</button></div>
+    ${manual.length ? `<div class="list">${manual.map((p) => `<div class="list-item"><span class="grow"><b>${esc(fmtSet(p))}</b>
+        <div class="sub">${fmtDate(p.loggedAt)}${p.note ? ` · ${esc(p.note)}` : ''}</div></span>
+        <button class="icon-btn" data-action="delete-pr" data-id="${p.id}" aria-label="Remove PR">×</button></div>`).join('')}</div>`
+      : '<div class="muted small">Add records from before you used the app; they count toward your PRs.</div>'}`;
 
   const stat = ([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
   return `<button class="btn ghost" data-action="back" data-fallback="#/exercises" style="margin-left:-12px">‹ Back</button>
@@ -651,6 +676,7 @@ async function viewExercise(id) {
       <div class="stat"><div class="k">Last done</div><div class="v" style="font-size:20px">${sess[0] ? fmtDate(sess[0].date) : '—'}</div></div>
     </div>
     ${note ? `<div class="muted small" style="margin:-4px 0 8px">${note}</div>` : ''}
+    ${manualHtml}
     <h3>${title}</h3>
     ${chart.points.length >= 2 ? chartHtml(chart) : `<div class="card muted small">Log this exercise in at least two workouts to see a chart.</div>`}
     <h3>Every session</h3>
@@ -732,6 +758,235 @@ afterRender.e = () => {
 };
 
 // ======================================================================
+// PROGRESS (body stats + personal records)
+// ======================================================================
+const todayKey = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+// Date input value → ISO. Today keeps the current time; other days get noon so time zones can't shift the date.
+function dateInputToIso(v, keepIso) {
+  if (!v) return nowIso();
+  if (keepIso && new Date(keepIso).toLocaleDateString('en-CA') === v) return keepIso;
+  if (v === todayKey()) return nowIso();
+  const [y, m, d] = v.split('-').map(Number);
+  return new Date(y, m - 1, d, 12).toISOString();
+}
+
+async function viewProgress() {
+  const [entries, profile, recs, ex] = await Promise.all([bodyEntries(), loadProfile(), personalRecords(), exercisesMap()]);
+  const withW = entries.filter((e) => e.weight);
+  const cur = withW[0];
+  const bf = entries.find((e) => e.bodyFat);
+  const b = bmi(cur, profile);
+  const change = withW.length > 1 ? Math.round((dispBodyW(withW[0]) - dispBodyW(withW[withW.length - 1])) * 10) / 10 : null;
+  const pts = withW.slice().reverse().map((e) => ({
+    t: +new Date(e.date), date: e.date, v1: dispBodyW(e),
+    tip: `${fmtNum(dispBodyW(e))} ${unit()}${e.bodyFat ? ` · ${fmtNum(e.bodyFat)}% fat` : ''}`,
+  }));
+  chartState = { series: [{ k: 'v1', label: 'Weight' }], fmt: (v) => fmtNum(Math.round(v * 10) / 10), points: pts };
+
+  const stat = (k, v, sub = '') => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="muted small">${sub}</div>` : ''}</div>`;
+  const statsHtml = `<div class="stats">
+      ${stat('Weight', cur ? `${fmtNum(dispBodyW(cur))} <small>${unit()}</small>` : '—',
+        change != null ? `${change > 0 ? '+' : ''}${fmtNum(change)} ${unit()} since ${fmtDate(withW[withW.length - 1].date)}` : (cur ? fmtDate(cur.date) : ''))}
+      ${stat('Height', fmtHeight(profile.heightCm))}
+      ${stat('BMI', b ?? '—', bmiLabel(b))}
+      ${stat('Body fat', bf ? `${fmtNum(bf.bodyFat)}<small>%</small>` : '—', bf ? fmtDate(bf.date) : '')}
+    </div>`;
+
+  const entryRows = entries.slice(0, 8).map((e) => {
+    const bits = [];
+    if (e.weight) bits.push(`${fmtNum(dispBodyW(e))} ${unit()}`);
+    if (e.bodyFat) bits.push(`${fmtNum(e.bodyFat)}% fat`);
+    MEASUREMENTS.forEach(([k, label]) => { if (e[k]) bits.push(`${label.toLowerCase()} ${fmtNum(dispLen(e[k], e.lenUnit))}`); });
+    return `<button class="list-item" data-action="edit-body" data-id="${e.id}"><span class="grow"><b>${fmtDay(e.date)}</b>
+      <div class="sub">${esc(bits.join(' · ') || '—')}</div></span><span class="chev">›</span></button>`;
+  }).join('');
+
+  const records = [...recs.entries()].map(([id, s]) => ({ e: ex.get(id), s })).filter((r) => r.e)
+    .sort((a, b2) => b2.s.loggedAt.localeCompare(a.s.loggedAt));
+  const recRows = records.map(({ e, s }) => {
+    const extra = isTimed(s) ? '' : s.reps > 1 ? ` · est. 1RM ${fmtNum(Math.round(e1rm(dispW(s), s.reps)))}` : '';
+    return `<a class="list-item" href="#/e/${e.id}"><span class="grow"><b>${esc(e.name)}</b>
+      <div class="sub" style="color:var(--text-2)">${esc(fmtSet(s))}${extra}</div></span>
+      <span class="muted small" style="text-align:right">${fmtDate(s.loggedAt)}${s.manual ? '<br><span class="tag">entered</span>' : ''}</span></a>`;
+  }).join('');
+
+  const exCount = ex.size;
+  return `<h1>Progress</h1>
+    <div class="row"><h3 class="grow" style="margin:8px 0">Body</h3><button class="btn" data-action="log-body">＋ Log stats</button></div>
+    ${statsHtml}
+    ${pts.length >= 2 ? `<h3>Weight over time</h3>${chartHtml(chartState)}` : ''}
+    ${entryRows ? `<h3>Recent entries</h3><div class="list">${entryRows}</div>` : '<div class="card muted small">Log your weight, height and body fat to track them over time.</div>'}
+    <div class="row" style="margin-top:20px"><h3 class="grow" style="margin:8px 0">Personal records</h3><button class="btn" data-action="add-pr">＋ Add PR</button></div>
+    ${recRows ? `<div class="list">${recRows}</div>` : '<div class="card muted small">Your best set for each exercise shows up here automatically. Add PRs from before you used the app with “Add PR”.</div>'}
+    <h3>Exercises</h3>
+    <a class="list-item list" href="#/exercises"><span class="grow"><b>All exercises</b><div class="sub">${exCount} exercises · history, charts, edit</div></span><span class="chev">›</span></a>`;
+}
+afterRender.progress = () => afterRender.e();
+
+// ---------- body stats sheet ----------
+async function openBodySheet(id) {
+  const [e, profile, entries] = await Promise.all([id ? db.get('body', id) : null, loadProfile(), bodyEntries()]);
+  const last = entries.find((x) => x.weight);
+  const w = e ? dispBodyW(e) : last ? dispBodyW(last) : '';
+  const lu = lenUnit();
+  const inches = profile.heightCm ? Math.round(profile.heightCm / 2.54) : null;
+  const heightFields = unit() === 'kg'
+    ? `<input class="text" id="bf-hcm" inputmode="decimal" placeholder="cm" value="${profile.heightCm ? Math.round(profile.heightCm) : ''}">`
+    : `<div class="row"><input class="text grow" id="bf-hft" inputmode="numeric" placeholder="ft" value="${inches ? Math.floor(inches / 12) : ''}">
+       <input class="text grow" id="bf-hin" inputmode="numeric" placeholder="in" value="${inches ? inches % 12 : ''}"></div>`;
+  const hasMeas = e && MEASUREMENTS.some(([k]) => e[k]);
+  openSheet(`
+    <h2>${e ? 'Edit' : 'Log'} body stats</h2>
+    <div class="stack">
+      <input class="text" type="date" id="bf-date" value="${e ? new Date(e.date).toLocaleDateString('en-CA') : todayKey()}" max="${todayKey()}">
+      <div class="logger" data-scope="form" style="border-radius:14px">
+        ${stepperHtml('bw', w === '' ? '' : fmtNum(w), `Weight · ${unit()}`, 'decimal', 'optional', unit() === 'kg' ? 0.1 : 0.2)}
+        ${stepperHtml('bfp', e?.bodyFat ? fmtNum(e.bodyFat) : '', 'Body fat · %', 'decimal', 'optional', 0.5)}
+      </div>
+      <div class="small muted">Height</div>
+      ${heightFields}
+      <details class="meas" ${hasMeas ? 'open' : ''}><summary>Measurements (${lu}, optional)</summary>
+        <div class="meas-grid">${MEASUREMENTS.map(([k, label]) => `<label><span>${label}</span>
+          <input class="text" inputmode="decimal" data-meas="${k}" value="${e?.[k] ? fmtNum(dispLen(e[k], e.lenUnit)) : ''}"></label>`).join('')}</div>
+      </details>
+      <button class="btn primary block" data-action="save-body" data-id="${e?.id || ''}">Save</button>
+      ${e ? `<button class="btn danger block" data-action="delete-body" data-id="${e.id}">Delete entry</button>` : ''}
+      <button class="btn ghost block" data-action="close-sheet">Cancel</button>
+    </div>`);
+}
+
+async function saveBody(id) {
+  const scope = $('[data-scope="form"]');
+  const num = (v) => { const n = parseNum(v); return n > 0 ? Math.round(n * 10) / 10 : null; };
+  const weight = num($('input[data-field="bw"]', scope).value);
+  const bodyFat = num($('input[data-field="bfp"]', scope).value);
+  const meas = Object.fromEntries(MEASUREMENTS.map(([k]) => [k, num($(`[data-meas="${k}"]`).value)]));
+  // height → profile
+  let heightCm = null;
+  if (unit() === 'kg') heightCm = num($('#bf-hcm').value);
+  else {
+    const ft = parseNum($('#bf-hft').value), inch = parseNum($('#bf-hin').value);
+    if (ft || inch) heightCm = Math.round((ft * 12 + inch) * 2.54 * 10) / 10;
+  }
+  const profile = await loadProfile();
+  if (heightCm && heightCm !== profile.heightCm) await saveProfile({ ...profile, heightCm });
+
+  const hasEntry = weight || bodyFat || Object.values(meas).some(Boolean);
+  if (!hasEntry && !heightCm) return toast('Enter at least one value');
+  const old = id ? await db.get('body', id) : null;
+  if (hasEntry) {
+    await db.put('body', {
+      id: id || uid(), date: dateInputToIso($('#bf-date').value, old?.date),
+      weight, unit: unit(), bodyFat, lenUnit: lenUnit(), ...meas, note: old?.note || '',
+    });
+  } else if (id) await db.del('body', id);
+  closeSheet(); buzz(15); toast('Saved'); render();
+}
+
+// ---------- manual PR sheet ----------
+async function openPrSheet(presetExId = '') {
+  const ex = [...(await exercisesMap()).values()].sort((a, b) => a.name.localeCompare(b.name));
+  const groups = CATEGORIES.map((c) => [c, ex.filter((e) => (e.category || 'Other') === c)]).filter(([, l]) => l.length);
+  openSheet(`
+    <h2>Add a personal record</h2>
+    <div class="stack">
+      <select class="text" id="pr-ex">
+        <option value="">Choose exercise…</option>
+        ${groups.map(([c, l]) => `<optgroup label="${esc(c)}">${l.map((e) =>
+          `<option value="${e.id}" data-type="${exType(e)}" ${e.id === presetExId ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</optgroup>`).join('')}
+      </select>
+      <div id="pr-fields"></div>
+      <input class="text" type="date" id="pr-date" value="${todayKey()}" max="${todayKey()}">
+      <input class="text" id="pr-note" placeholder="Note (optional)" autocomplete="off">
+      <button class="btn primary block" data-action="save-pr">Save PR</button>
+      <button class="btn ghost block" data-action="close-sheet">Cancel</button>
+    </div>`);
+  drawPrFields();
+}
+function drawPrFields() {
+  const sel = $('#pr-ex'), box = $('#pr-fields');
+  if (!sel || !box) return;
+  const type = sel.selectedOptions[0]?.dataset.type;
+  if (!type) { box.innerHTML = ''; return; }
+  const d = type === 'weight' ? { w: 0, r: 1 } : { d: type === 'time' ? 60 : 20 * 60, dist: 0 };
+  box.innerHTML = `<div class="logger" data-scope="form" data-kind="${type}" style="border-radius:14px">${fieldsHtml(type, d)}</div>`;
+}
+async function savePr() {
+  const exId = $('#pr-ex').value;
+  if (!exId) return toast('Choose an exercise');
+  const vals = readScope($('#pr-fields [data-scope="form"]'));
+  const timed = 'd' in vals;
+  if (timed ? !vals.d : !vals.r) return toast(timed ? 'Enter a time' : 'Enter reps'); // weight 0 = bodyweight
+  const base = { id: uid(), exerciseId: exId, manual: true, loggedAt: dateInputToIso($('#pr-date').value), note: $('#pr-note').value.trim(), unit: unit(), order: 0 };
+  await db.put('prs', timed
+    ? { ...base, weight: 0, reps: 0, duration: vals.d, distance: vals.dist || null, distUnit: distUnit() }
+    : { ...base, weight: vals.w, reps: vals.r });
+  closeSheet(); buzz(15); toast('PR saved'); render();
+}
+
+// ======================================================================
+// BODY (3D muscle map)
+// ======================================================================
+async function viewBody() {
+  return `<div class="body3d">
+      <div class="body-canvas" id="body-canvas"></div>
+      <div class="body-top">
+        <h1>Muscles</h1>
+        <div class="muted small">Drag to spin · pinch or scroll to zoom · two fingers to move · tap a muscle</div>
+      </div>
+      <div class="body-ctrls">
+        <button class="btn" data-action="body-view" data-v="front">Front</button>
+        <button class="btn" data-action="body-view" data-v="back">Back</button>
+        <button class="btn" data-action="body-view" data-v="reset">Reset</button>
+      </div>
+      <div class="body-loading" id="body-loading">Loading 3D model…</div>
+      <div class="body-chips">${MUSCLES.map((m) => `<button class="chip" data-action="muscle" data-m="${m.id}">${esc(m.name)}</button>`).join('')}</div>
+    </div>`;
+}
+afterRender.body = async () => {
+  const el = $('#body-canvas');
+  try {
+    const mod = await import('./body3d.js');
+    if (route().name !== 'body' || !el.isConnected) return;
+    body3d = mod.mount(el, { onSelect: (id) => openMuscle(id) });
+    $('#body-loading')?.remove();
+  } catch (err) {
+    const l = $('#body-loading');
+    if (l) l.innerHTML = 'The 3D model needs an internet connection the first time it loads.<br>You can still pick a muscle below.';
+  }
+};
+
+async function openMuscle(id) {
+  const m = musclesById[id];
+  if (!m) return;
+  body3d?.select(id);
+  document.querySelectorAll('.body-chips .chip').forEach((c) => c.classList.toggle('on', c.dataset.m === id));
+  const [ex, sets] = await Promise.all([exercisesMap(), db.all('sets')]);
+  const lastDone = new Map();
+  sets.forEach((s) => { if ((lastDone.get(s.exerciseId) || '') < s.loggedAt) lastDone.set(s.exerciseId, s.loggedAt); });
+  // Built-in matches first, then your own exercises whose names match this muscle.
+  const ids = new Set(m.exercises.filter((x) => ex.has(x)));
+  for (const e of ex.values()) if (!e.builtin && m.match?.test(e.name) && !m.exclude?.test(e.name)) ids.add(e.id);
+  const list = [...ids].map((x) => ex.get(x)).sort((a, b) => (lastDone.get(b.id) || '').localeCompare(lastDone.get(a.id) || ''));
+  const canAdd = !!state.activeId;
+  openSheet(`
+    <div class="row"><h2 class="grow" style="margin:0">${esc(m.name)}</h2><button class="btn ghost" data-action="close-sheet">Close</button></div>
+    <div class="muted small">${esc(m.about)}</div>
+    <h3>Exercises</h3>
+    <div class="list">${list.map((e) => `<div class="list-item">
+        <a class="grow linkish" href="#/e/${e.id}" data-action="close-sheet" style="text-decoration:none"><b>${esc(e.name)}</b>
+          <div class="sub">${lastDone.get(e.id) ? `Last done ${fmtDate(lastDone.get(e.id))}` : 'Not logged yet'}${e.builtin ? '' : ' · yours'}</div></a>
+        ${canAdd ? `<button class="btn" data-action="muscle-add" data-ex="${e.id}" aria-label="Add ${esc(e.name)} to workout">＋</button>` : ''}
+      </div>`).join('')}</div>
+    ${canAdd ? '' : '<div class="muted small" style="margin-top:6px">Start a workout to add these with one tap.</div>'}
+    <h3>Stretches</h3>
+    ${m.stretches.map((s) => `<div class="card stretch"><div class="row"><b class="grow">${esc(s.name)}</b><span class="tag">${esc(s.hold)}</span></div>
+      <div class="small" style="color:var(--text-2);margin-top:4px">${esc(s.how)}</div></div>`).join('')}
+  `, { tall: true });
+  $('#sheet-root .sheet').classList.add('muscle-sheet');
+}
+
+// ======================================================================
 // SETTINGS
 // ======================================================================
 async function viewSettings() {
@@ -759,9 +1014,20 @@ async function viewSettings() {
       <div class="muted">${persisted ? 'Persistent storage granted — the browser won’t clear it to save space.' : 'Storage may be cleared by the browser under pressure.'}</div>
       ${persisted ? '' : '<button class="btn block" data-action="persist" style="margin-top:10px">Ask to keep data permanently</button>'}
     </div>
+    <h3>Display</h3>
+    <div class="card small stack">
+      <div>If the bottom bar doesn’t reach the bottom of your screen, try each option below. It changes right away.</div>
+      <div class="seg fit-seg">${Object.entries(FIT_MODES).map(([m, label]) =>
+        `<button class="${(ls.get('fitMode') || 'auto') === m ? 'on' : ''}" data-action="fit-mode" data-m="${m}">${label}</button>`).join('')}</div>
+      <div class="muted" id="display-info">${displayInfoText()}</div>
+    </div>
     <h3>Danger zone</h3>
     <button class="btn danger block" data-action="erase">Erase all data</button>
-    <p class="muted small" style="text-align:center;margin-top:24px">LiftLog · works offline · no account, no tracking</p>`;
+    <p class="muted small" style="text-align:center;margin-top:24px">LiftLog ${APP_VERSION} · works offline · no account, no tracking</p>`;
+}
+function displayInfoText() {
+  const i = displayInfo();
+  return `App ${i.version} · ${i.mode}<br>Screen ${i.screen} · viewport ${i.viewport} · visual ${i.visual}<br>Safe area ${i.safe} · bar ends at ${i.navBottom}`;
 }
 
 function download(filename, text, type) {
@@ -783,6 +1049,43 @@ const stamp = () => new Date().toLocaleDateString('en-CA');
 // ACTIONS (one delegated click handler)
 // ======================================================================
 const actions = {
+  // progress
+  'log-body': () => openBodySheet(),
+  'edit-body': (el) => openBodySheet(el.dataset.id),
+  'save-body': (el) => saveBody(el.dataset.id),
+  'delete-body': async (el) => {
+    const e = await db.get('body', el.dataset.id);
+    await db.del('body', el.dataset.id);
+    closeSheet(); render();
+    toast('Entry deleted', { label: 'Undo', fn: async () => { await db.put('body', e); render(); } });
+  },
+  'add-pr': (el) => openPrSheet(el.dataset.ex || ''),
+  'save-pr': () => savePr(),
+  'delete-pr': async (el) => {
+    const p = await db.get('prs', el.dataset.id);
+    await db.del('prs', el.dataset.id);
+    render();
+    toast('PR removed', { label: 'Undo', fn: async () => { await db.put('prs', p); render(); } });
+  },
+  // body map
+  muscle: (el) => openMuscle(el.dataset.m),
+  'body-view': (el) => body3d?.view(el.dataset.v),
+  'muscle-add': async (el) => {
+    const wo = await db.get('workouts', state.activeId);
+    if (!wo) return toast('Start a workout first');
+    wo.exerciseOrder = wo.exerciseOrder || [];
+    if (!wo.exerciseOrder.includes(el.dataset.ex)) wo.exerciseOrder.push(el.dataset.ex);
+    await db.put('workouts', wo);
+    state.focusEx = el.dataset.ex;
+    el.textContent = '✓'; el.disabled = true; buzz(12);
+    toast('Added to your workout');
+  },
+  'fit-mode': (el) => {
+    ls.set('fitMode', el.dataset.m);
+    fitScreen();
+    el.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
+    requestAnimationFrame(() => { const d = $('#display-info'); if (d) d.innerHTML = displayInfoText(); });
+  },
   'close-sheet': () => { closeSheet(); confirmSheet.resolve?.(false); confirmSheet.resolve = null; },
   'confirm-yes': () => { const r = confirmSheet.resolve; confirmSheet.resolve = null; closeSheet(); r?.(true); },
   'toast-act': () => { $('#toast').classList.remove('show'); toast.action?.(); },
@@ -825,11 +1128,11 @@ const actions = {
       const cur = parseDur(input.value, scope.dataset.kind === 'cardio');
       input.value = fmtDur(Math.max(0, roundTo(cur, stepS) + dir * stepS));
     } else {
-      const stepV = f === 'w' ? weightStep() : f === 'dist' ? 0.1 : 1;
+      const stepV = el.dataset.step ? Number(el.dataset.step) : f === 'w' ? weightStep() : f === 'dist' ? 0.1 : 1;
       const next = Math.max(0, parseNum(input.value) + dir * stepV);
       input.value = fmtNum(Math.round(next * 100) / 100);
     }
-    if (scope.dataset.scope !== 'edit') state.drafts[scope.dataset.scope] = readScope(scope);
+    if (isDraftScope(scope.dataset.scope)) state.drafts[scope.dataset.scope] = readScope(scope);
     buzz(5);
   },
   log: (el) => logSet(el.dataset.ex, readScope(el.closest('[data-scope]'))),
@@ -954,7 +1257,7 @@ document.addEventListener('click', (ev) => {
 // Keep the logger draft in sync with typed values; select-all on focus for fast overwrite.
 document.addEventListener('input', (ev) => {
   const scope = ev.target.closest?.('.logger[data-scope]');
-  if (scope && scope.dataset.scope !== 'edit') state.drafts[scope.dataset.scope] = readScope(scope);
+  if (scope && isDraftScope(scope.dataset.scope)) state.drafts[scope.dataset.scope] = readScope(scope);
 });
 document.addEventListener('focusin', (ev) => { if (ev.target.matches?.('.field input')) setTimeout(() => ev.target.select(), 0); });
 document.addEventListener('keydown', (ev) => {
@@ -965,6 +1268,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') actions['close-sheet']();
 });
 document.addEventListener('change', async (ev) => {
+  if (ev.target.id === 'pr-ex') return drawPrFields();
   if (ev.target.id !== 'import-file') return;
   const file = ev.target.files[0];
   ev.target.value = '';
@@ -1024,11 +1328,39 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) tick
 // ---------- boot ----------
 window.addEventListener('hashchange', () => { closeSheet(); render(); view().scrollTop = 0; });
 
-// iOS home-screen apps under-report the viewport height by the status bar;
-// give CSS the true screen height (portrait-only app, so screen.height is right).
+// ---------- bottom-bar fit (see Settings → Display) ----------
+// iOS home-screen apps can under-report the viewport height by the status bar,
+// leaving a gap under the nav. The user can pick which workaround looks right.
+export const APP_VERSION = 'v4';
+const FIT_MODES = { auto: 'Auto', standard: 'Off', screen: 'Stretch A', inset: 'Stretch B', fill: 'Fill' };
+const ls = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+};
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 function fitScreen() {
-  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  if (standalone && screen.height > innerHeight) document.documentElement.style.setProperty('--screen-h', `${screen.height}px`);
+  const root = document.documentElement;
+  root.style.setProperty('--screen-h', `${screen.height}px`);
+  let mode = ls.get('fitMode') || 'auto';
+  if (mode === 'auto') mode = isStandalone() && screen.height > innerHeight + 10 ? 'screen' : 'standard';
+  Object.keys(FIT_MODES).forEach((m) => root.classList.toggle(`fit-${m}`, m === mode));
+}
+function displayInfo() {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;top:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);visibility:hidden';
+  document.body.appendChild(probe);
+  const cs = getComputedStyle(probe);
+  const info = {
+    version: APP_VERSION,
+    mode: isStandalone() ? 'home screen' : 'browser',
+    screen: `${screen.width}×${screen.height}`,
+    viewport: `${innerWidth}×${innerHeight}`,
+    visual: window.visualViewport ? `${Math.round(visualViewport.height)}` : '—',
+    safe: `top ${parseFloat(cs.paddingTop)} · bottom ${parseFloat(cs.paddingBottom)}`,
+    navBottom: Math.round($('.tabbar').getBoundingClientRect().bottom),
+  };
+  probe.remove();
+  return info;
 }
 fitScreen();
 window.addEventListener('resize', fitScreen);

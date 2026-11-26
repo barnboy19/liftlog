@@ -223,8 +223,49 @@ export async function deleteExercise(id) {
 
 // ---------- backup ----------
 export async function exportJson() {
-  const [exercises, workouts, sets] = await Promise.all(['exercises', 'workouts', 'sets'].map((s) => db.all(s)));
-  return { app: 'liftlog', schema: 1, exportedAt: nowIso(), settings: { ...settings }, exercises, workouts, sets };
+  const [exercises, workouts, sets, body, prs] = await Promise.all(['exercises', 'workouts', 'sets', 'body', 'prs'].map((s) => db.all(s)));
+  return { app: 'liftlog', schema: 2, exportedAt: nowIso(), settings: { ...settings }, profile: await loadProfile(), exercises, workouts, sets, body, prs };
+}
+
+// ---------- body stats ----------
+// profile: { heightCm }. body entries: { id, date, weight, unit, bodyFat, lenUnit, waist, chest, arms, thighs, hips, note }
+export const MEASUREMENTS = [['waist', 'Waist'], ['chest', 'Chest'], ['arms', 'Arms'], ['thighs', 'Thighs'], ['hips', 'Hips']];
+export async function loadProfile() { return (await db.get('meta', 'profile'))?.value || {}; }
+export async function saveProfile(p) { await db.put('meta', { key: 'profile', value: p }); }
+export async function bodyEntries() { return (await db.all('body')).sort((a, b) => b.date.localeCompare(a.date)); }
+export const lenUnit = () => (settings.unit === 'kg' ? 'cm' : 'in');
+export const dispLen = (v, from) => {
+  if (!v) return 0;
+  const to = lenUnit();
+  return Math.round((from === to ? v : to === 'cm' ? v * 2.54 : v / 2.54) * 10) / 10;
+};
+export const dispBodyW = (e) => (e.weight ? Math.round(convert(e.weight, e.unit, settings.unit) * 10) / 10 : 0);
+export function fmtHeight(cm) {
+  if (!cm) return '—';
+  if (settings.unit === 'kg') return `${Math.round(cm)} cm`;
+  const inches = Math.round(cm / 2.54);
+  return `${Math.floor(inches / 12)}′${inches % 12}″`;
+}
+export function bmi(entry, profile) {
+  if (!entry?.weight || !profile?.heightCm) return null;
+  const kg = convert(entry.weight, entry.unit, 'kg');
+  return Math.round((kg / (profile.heightCm / 100) ** 2) * 10) / 10;
+}
+export function bmiLabel(v) {
+  if (v == null) return '';
+  return v < 18.5 ? 'Underweight' : v < 25 ? 'Healthy range' : v < 30 ? 'Overweight' : 'Obese range';
+}
+
+// ---------- personal records ----------
+// Best per exercise across logged sets and hand-entered PRs (same shape as a set).
+export async function personalRecords() {
+  const [sets, manual] = await Promise.all([db.all('sets'), db.all('prs')]);
+  const best = new Map();
+  for (const s of [...sets, ...manual]) {
+    const cur = best.get(s.exerciseId);
+    if (!cur || setScore(s) > setScore(cur) + 1e-9) best.set(s.exerciseId, s);
+  }
+  return best; // exerciseId -> best set-like record
 }
 
 export async function importJson(data) {
@@ -235,13 +276,19 @@ export async function importJson(data) {
   const workouts = data.workouts.filter((r) => ok(r, ['startedAt']));
   const sets = data.sets.filter((r) => ok(r, ['workoutId', 'exerciseId', 'weight', 'reps', 'loggedAt']))
     .map((r) => ({ unit: 'lb', order: 0, ...r }));
-  await db.txn(['exercises', 'workouts', 'sets'], (s) => {
+  // body / prs arrived in schema 2; older backups simply don't have them
+  const body = (Array.isArray(data.body) ? data.body : []).filter((r) => ok(r, ['date']));
+  const prs = (Array.isArray(data.prs) ? data.prs : []).filter((r) => ok(r, ['exerciseId', 'loggedAt']));
+  await db.txn(['exercises', 'workouts', 'sets', 'body', 'prs'], (s) => {
     exercises.forEach((r) => s.exercises.put(r));
     workouts.forEach((r) => s.workouts.put(r));
     sets.forEach((r) => s.sets.put(r));
+    body.forEach((r) => s.body.put(r));
+    prs.forEach((r) => s.prs.put(r));
   });
   if (data.settings) await saveSettings(data.settings);
-  return { exercises: exercises.length, workouts: workouts.length, sets: sets.length };
+  if (data.profile && typeof data.profile === 'object') await saveProfile({ ...(await loadProfile()), ...data.profile });
+  return { exercises: exercises.length, workouts: workouts.length, sets: sets.length, body: body.length, prs: prs.length };
 }
 
 export async function exportCsv() {

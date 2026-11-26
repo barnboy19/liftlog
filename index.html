@@ -15,6 +15,15 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/app.css">
+  <!-- Three.js for the 3D body map: loaded on first visit to the Body tab, then cached offline by sw.js -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
@@ -29,9 +38,13 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
       <span>History</span>
     </a>
-    <a href="#/exercises" data-tab="exercises">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-      <span>Exercises</span>
+    <a href="#/body" data-tab="body">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="4.5" r="2"/><path d="M5 8.5h14M12 8.5v6M12 14.5l-3.5 6.5M12 14.5l3.5 6.5"/></svg>
+      <span>Body</span>
+    </a>
+    <a href="#/progress" data-tab="progress">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M6 15l4-4 3 3 5-6"/><path d="M15 8h3v3"/></svg>
+      <span>Progress</span>
     </a>
     <a href="#/settings" data-tab="settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
