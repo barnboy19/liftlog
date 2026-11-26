@@ -1024,6 +1024,15 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) tick
 // ---------- boot ----------
 window.addEventListener('hashchange', () => { closeSheet(); render(); view().scrollTop = 0; });
 
+// iOS home-screen apps under-report the viewport height by the status bar;
+// give CSS the true screen height (portrait-only app, so screen.height is right).
+function fitScreen() {
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (standalone && screen.height > innerHeight) document.documentElement.style.setProperty('--screen-h', `${screen.height}px`);
+}
+fitScreen();
+window.addEventListener('resize', fitScreen);
+
 async function boot() {
   await ensureSeed();
   await loadSettings();
