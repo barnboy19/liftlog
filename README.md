@@ -82,6 +82,8 @@ Your workouts exist **only on that phone**. Deleting the app, clearing Safari or
 
 - **Start Workout** creates a workout stamped with the current time. If you open the app while today's workout is still open, it offers **Continue Workout**. An unfinished workout from an earlier day can be finished from the home screen, and its end time is set to its last set.
 - **Logging:** the weight and reps prefill from your last set of that exercise today, or from the first set of your last session. Use the big **−/+** buttons (weight step is set in Settings) or tap a number to type it. **Repeat** logs the previous set again with one tap. Your phone vibrates on Android; iOS doesn't support web vibration.
+- **Timed exercises** (planks, running, Stairmaster…): each exercise is recorded as *Weight × reps*, *Time*, or *Time + distance*. When you create a new exercise in the picker, choose the type (the app guesses one from the name); change it later under **Exercises → (exercise) → Edit**. Type a time as `1:30`, or a bare number (seconds for Time exercises, minutes for Time + distance). **▶ Start timer** runs a stopwatch: for Time exercises, stopping it logs the set; for Time + distance it fills in the time so you can add the distance. Distance is in miles when units are lb, and kilometers when units are kg.
+- **Rate the workout:** after **Finish**, tap an effort level (1–10) and how you felt (Awful → Great). Both save as soon as you tap, show on the History card, can be changed later on the workout's detail page, and are included in the CSV export.
 - **Edit or delete a set:** tap it to edit, or swipe it left to delete (with Undo).
 - **"Last time: 185 × 8, 8, 6 (Nov 18)"** under each exercise shows what to beat. A **PR** badge appears when a set beats your best estimated 1RM from before today.
 - **Estimated 1RM** uses Epley: `weight × (1 + reps / 30)`. A single rep counts as its own 1RM.
@@ -91,9 +93,9 @@ Your workouts exist **only on that phone**. Deleting the app, clearing Safari or
 
 | store | fields |
 |---|---|
-| `exercises` | id, name, category, createdAt, builtin? |
-| `workouts` | id, startedAt, endedAt, notes, exerciseOrder[] |
-| `sets` | id, workoutId, exerciseId, weight, reps, unit, loggedAt, order |
+| `exercises` | id, name, category, type (weight / time / cardio), createdAt, builtin? |
+| `workouts` | id, startedAt, endedAt, notes, effort (1–10), feeling (1–5), exerciseOrder[] |
+| `sets` | id, workoutId, exerciseId, weight, reps, unit, loggedAt, order; timed sets add duration (sec), distance, distUnit |
 | `meta` | settings, seeded flag |
 
 Timestamps are ISO-8601 strings. Built-in exercises have stable ids (`ex_bench-press`), so backups from different devices merge without creating duplicates.

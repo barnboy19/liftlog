@@ -7,9 +7,27 @@ const SEED = {
   Legs: ['Squat', 'Front Squat', 'Leg Press', 'Romanian Deadlift', 'Bulgarian Split Squat', 'Lunge', 'Hip Thrust', 'Leg Extension', 'Leg Curl', 'Calf Raise'],
   Shoulders: ['Overhead Press', 'Dumbbell Shoulder Press', 'Lateral Raise', 'Rear Delt Fly', 'Shrug'],
   Arms: ['Barbell Curl', 'Dumbbell Curl', 'Hammer Curl', 'Preacher Curl', 'Tricep Pushdown', 'Skull Crusher', 'Overhead Tricep Extension'],
-  Core: ['Hanging Leg Raise', 'Cable Crunch', 'Ab Wheel'],
+  Core: ['Hanging Leg Raise', 'Cable Crunch', 'Ab Wheel', ['Plank', 'time'], ['Side Plank', 'time'], ['Dead Hang', 'time'], ['Wall Sit', 'time']],
+  Cardio: [['Running', 'cardio'], ['Treadmill', 'cardio'], ['Walking', 'cardio'], ['Cycling', 'cardio'], ['Rowing Machine', 'cardio'],
+    ['Stairmaster', 'time'], ['Elliptical', 'time'], ['Jump Rope', 'time']],
 };
 export const CATEGORIES = [...Object.keys(SEED), 'Other'];
+const SEED_VERSION = 2; // bump when adding built-ins so existing installs get them
+
+// Exercise types: how a set is recorded.
+export const TYPES = {
+  weight: 'Weight × reps',
+  time: 'Time',
+  cardio: 'Time + distance',
+};
+export const exType = (e) => e?.type || 'weight';
+// Best guess for a new exercise's type from its name.
+export function guessType(name) {
+  const n = name.toLowerCase();
+  if (/\b(run|jog|walk|bike|cycl|rowing|row machine|swim|treadmill|hike|sprint)/.test(n)) return 'cardio';
+  if (/\b(plank|hang|hold|wall sit|stair|elliptical|rope|bike|carry|stretch|yoga|sauna)/.test(n)) return 'time';
+  return 'weight';
+}
 
 // Built-in exercises get stable ids so exports from two phones merge cleanly.
 const slug = (s) => 'ex_' + s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -18,14 +36,18 @@ export const uid = () =>
 export const nowIso = () => new Date().toISOString();
 
 export async function ensureSeed() {
-  if (await db.get('meta', 'seeded')) return;
+  const seeded = (await db.get('meta', 'seeded'))?.value;
+  if (seeded === SEED_VERSION) return;
   const createdAt = nowIso();
   const have = new Set((await db.all('exercises')).map((e) => e.id)); // never clobber renamed/imported ones
   const rows = [];
-  for (const [category, names] of Object.entries(SEED))
-    for (const name of names) if (!have.has(slug(name))) rows.push({ id: slug(name), name, category, createdAt, builtin: true });
+  for (const [category, items] of Object.entries(SEED))
+    for (const item of items) {
+      const [name, type = 'weight'] = Array.isArray(item) ? item : [item];
+      if (!have.has(slug(name))) rows.push({ id: slug(name), name, category, type, createdAt, builtin: true });
+    }
   await db.putMany('exercises', rows);
-  await db.put('meta', { key: 'seeded', value: true });
+  await db.put('meta', { key: 'seeded', value: SEED_VERSION });
 }
 
 // ---------- settings ----------
@@ -52,10 +74,47 @@ const round1 = (n) => Math.round(n * 10) / 10;
 export const dispW = (set) => round1(convert(set.weight, set.unit, settings.unit));
 export const fmtNum = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, ''));
 export const fmtW = (w) => (w === 0 ? 'BW' : fmtNum(w));
-export const fmtSet = (s) => `${fmtW(dispW(s))} × ${s.reps}`;
+// ----- timed sets: duration in seconds, optional distance -----
+export const isTimed = (s) => s.duration != null;
+export const distUnit = () => (settings.unit === 'kg' ? 'km' : 'mi');
+const KM_PER_MI = 1.609344;
+export const dispDist = (s) => {
+  if (!s.distance) return 0;
+  const to = distUnit();
+  const v = s.distUnit === to ? s.distance : (to === 'km' ? s.distance * KM_PER_MI : s.distance / KM_PER_MI);
+  return Math.round(v * 100) / 100;
+};
+// 90 → "1:30", 3725 → "1:02:05"
+export function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+}
+// "1:30" / "1.30" → 90 s, "1:02:05" → 3725 s. A bare number means minutes for cardio, seconds otherwise.
+export function parseDur(text, bareIsMinutes = false) {
+  const t = String(text).trim();
+  if (!t) return 0;
+  if (/[:.]/.test(t)) {
+    const parts = t.split(/[:.]/).map((p) => parseInt(p, 10) || 0);
+    return parts.reduce((acc, p) => acc * 60 + p, 0);
+  }
+  const n = parseFloat(t) || 0;
+  return Math.round(bareIsMinutes ? n * 60 : n);
+}
+const fmtTimed = (s) => {
+  const d = dispDist(s);
+  return d ? `${fmtDur(s.duration)} · ${fmtNum(d)} ${distUnit()}` : fmtDur(s.duration);
+};
+
+export const fmtSet = (s) => (isTimed(s) ? fmtTimed(s) : `${fmtW(dispW(s))} × ${s.reps}`);
+
+// "Score" used for PRs and bests: est. 1RM for lifts, distance (else time) for timed sets.
+export const setScore = (s) => (isTimed(s) ? (dispDist(s) ? dispDist(s) * 100000 + s.duration : s.duration) : e1rm(dispW(s), s.reps));
 
 // "185 × 8, 8, 6" — consecutive sets at the same weight collapse; weight changes split with " · ".
+// Timed sets just list: "1:30, 1:15" or "25:00 · 3.1 mi".
 export function fmtSetsCompact(sets) {
+  if (sets.length && isTimed(sets[0])) return sets.map(fmtTimed).join(', ');
   const groups = [];
   for (const s of sets) {
     const w = dispW(s);
@@ -88,6 +147,16 @@ export function fmtClock(ms) {
 }
 export const isToday = (iso) => new Date(iso).toDateString() === new Date().toDateString();
 export const dayKey = (iso) => new Date(iso).toDateString();
+
+// ----- post-workout ratings -----
+export const EFFORT_LABELS = ['', 'Very easy', 'Very easy', 'Easy', 'Easy', 'Moderate', 'Moderate', 'Hard', 'Hard', 'Very hard', 'Max effort'];
+export const FEELINGS = [
+  { emoji: '😫', label: 'Awful' },
+  { emoji: '😕', label: 'Meh' },
+  { emoji: '😐', label: 'OK' },
+  { emoji: '🙂', label: 'Good' },
+  { emoji: '💪', label: 'Great' },
+];
 
 // Epley: 1RM = w × (1 + reps/30). A single is its own 1RM.
 export const e1rm = (w, reps) => (reps <= 1 ? w : w * (1 + reps / 30));
@@ -179,14 +248,19 @@ export async function exportCsv() {
   const [ex, workouts, sets] = await Promise.all([exercisesMap(), db.all('workouts'), db.all('sets')]);
   const wo = new Map(workouts.map((w) => [w.id, w]));
   const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows = [['date', 'time', 'workout_started', 'exercise', 'category', 'set', 'weight', 'unit', 'reps', 'est_1rm', 'logged_at', 'workout_id']];
+  const rows = [['date', 'time', 'workout_started', 'exercise', 'category', 'set', 'weight', 'unit', 'reps', 'est_1rm',
+    'duration_sec', 'duration', 'distance', 'distance_unit', 'workout_effort', 'workout_feeling', 'logged_at', 'workout_id']];
   sets.sort((a, b) => a.loggedAt.localeCompare(b.loggedAt)).forEach((s) => {
     const d = new Date(s.loggedAt);
     const e = ex.get(s.exerciseId);
+    const w = wo.get(s.workoutId);
+    const timed = isTimed(s);
     rows.push([
-      d.toLocaleDateString('en-CA'), d.toTimeString().slice(0, 5), wo.get(s.workoutId)?.startedAt ?? '',
-      e?.name ?? s.exerciseId, e?.category ?? '', s.order + 1, s.weight, s.unit, s.reps,
-      round1(e1rm(s.weight, s.reps)), s.loggedAt, s.workoutId,
+      d.toLocaleDateString('en-CA'), d.toTimeString().slice(0, 5), w?.startedAt ?? '',
+      e?.name ?? s.exerciseId, e?.category ?? '', s.order + 1,
+      timed ? '' : s.weight, timed ? '' : s.unit, timed ? '' : s.reps, timed ? '' : round1(e1rm(s.weight, s.reps)),
+      timed ? s.duration : '', timed ? fmtDur(s.duration) : '', s.distance || '', s.distance ? s.distUnit : '',
+      w?.effort ?? '', w?.feeling ? FEELINGS[w.feeling - 1].label : '', s.loggedAt, s.workoutId,
     ]);
   });
   return rows.map((r) => r.map(q).join(',')).join('\n');

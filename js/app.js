@@ -4,6 +4,7 @@ import {
   convert, dispW, fmtNum, fmtW, fmtSet, fmtSetsCompact, fmtDate, fmtDay, fmtTime, fmtDuration, fmtClock,
   isToday, dayKey, e1rm, exercisesMap, workoutSets, allWorkouts, exerciseSessions, recentExerciseIds,
   deleteWorkout, deleteExercise, exportJson, importJson, exportCsv, eraseAll,
+  TYPES, exType, guessType, isTimed, distUnit, dispDist, fmtDur, parseDur, setScore, EFFORT_LABELS, FEELINGS,
 } from './data.js';
 
 // ---------- tiny helpers ----------
@@ -22,7 +23,8 @@ const ss = {
 const state = {
   activeId: ss.get('activeWorkoutId'), // workout currently being logged (this app session)
   focusEx: null,                       // exercise card showing the logger
-  drafts: {},                          // exerciseId -> { w, r } pending values in the logger
+  drafts: {},                          // exerciseId -> { w, r } or { d, dist } pending values in the logger
+  timer: null,                         // { exId, start } stopwatch for a timed exercise
   historyFilter: '',
   exFilter: '',
 };
@@ -119,6 +121,7 @@ async function viewWorkout() {
         <div class="card-title">${fmtDay(last.startedAt)}</div>
         <div class="muted small">${fmtDuration(new Date(last.endedAt) - new Date(last.startedAt))} · ${sets.length} sets</div>
         <div class="small" style="margin-top:6px">${esc(names.join(', ') || 'No sets')}</div>
+        ${ratingLine(last) ? `<div class="small muted" style="margin-top:4px">${ratingLine(last)}</div>` : ''}
       </a>`;
   }
 
@@ -143,29 +146,24 @@ async function viewActive(w) {
     const mine = sets.filter((s) => s.exerciseId === exId);
     const prior = histories[exId].filter((h) => h.workoutId !== w.id);
     const prev = prior[0];
-    const priorBest = Math.max(0, ...prior.flatMap((h) => h.sets.map((s) => e1rm(dispW(s), s.reps))));
+    const priorBest = Math.max(0, ...prior.flatMap((h) => h.sets.map(setScore)));
     // Flag the best set today if it beats everything before today.
     let prId = null;
     if (prior.length) {
       let best = priorBest;
-      mine.forEach((s) => { const v = e1rm(dispW(s), s.reps); if (v > best + 0.01) { best = v; prId = s.id; } });
+      mine.forEach((s) => { const v = setScore(s); if (v > best + 0.01) { best = v; prId = s.id; } });
     }
     const focused = state.focusEx === exId;
-    const d = draftFor(exId, mine, prev);
+    const type = exType(e);
+    const d = draftFor(exId, mine, prev, type);
     const lastLine = prev
       ? `Last time: <b>${esc(fmtSetsCompact(prev.sets))}</b> (${fmtDate(prev.date)})`
       : 'First time doing this one';
 
     const rows = mine.map((s, i) => setRow(s, i, { pr: s.id === prId })).join('');
-    const logger = focused ? `
-      <div class="logger" data-scope="${exId}">
-        ${stepperHtml('w', d.w, `Weight · ${unit()}`, 'decimal')}
-        ${stepperHtml('r', d.r, 'Reps', 'numeric')}
-        <div class="actions">
-          <button class="btn" data-action="repeat" data-ex="${exId}" ${mine.length || prev ? '' : 'disabled'}>↻ Repeat</button>
-          <button class="btn primary" data-action="log" data-ex="${exId}">Log set ${mine.length + 1}</button>
-        </div>
-      </div>` : `<div class="collapsed-hint">${mine.length ? '' : 'No sets yet · '}Tap to log</div>`;
+    const logger = focused
+      ? loggerHtml(exId, type, d, mine.length, !!(mine.length || prev))
+      : `<div class="collapsed-hint">${mine.length ? '' : 'No sets yet · '}Tap to log</div>`;
 
     return `<article class="ex-card ${focused ? 'focused' : ''}" data-ex="${exId}" ${focused ? '' : 'data-action="focus"'}>
         <div class="ex-head">
@@ -197,40 +195,73 @@ function setRow(s, i, { pr = false, showTime = true } = {}) {
     </div></li>`;
 }
 
-function stepperHtml(field, value, label, mode) {
+function stepperHtml(field, text, label, mode, placeholder = '') {
   return `<div class="stepper">
       <button data-action="step" data-field="${field}" data-dir="-1" aria-label="Decrease ${label}">−</button>
       <div class="field"><label>${label}</label>
-        <input data-field="${field}" inputmode="${mode}" enterkeyhint="done" autocomplete="off" value="${fmtNum(value)}" aria-label="${label}"></div>
+        <input data-field="${field}" inputmode="${mode}" enterkeyhint="done" autocomplete="off" value="${esc(text)}" placeholder="${placeholder}" aria-label="${label}"></div>
       <button data-action="step" data-field="${field}" data-dir="1" aria-label="Increase ${label}">+</button>
     </div>`;
 }
 
-// Prefill: last set this workout → first set of the last session → zero.
-function draftFor(exId, mine, prev) {
+// Input fields for one set, by exercise type. `kind` drives parsing and step sizes.
+function fieldsHtml(type, d) {
+  if (type === 'weight') return stepperHtml('w', fmtNum(d.w), `Weight · ${unit()}`, 'decimal') + stepperHtml('r', fmtNum(d.r), 'Reps', 'numeric');
+  return stepperHtml('d', fmtDur(d.d), 'Time · m:ss', 'decimal')
+    + (type === 'cardio' ? stepperHtml('dist', d.dist ? fmtNum(d.dist) : '', `Distance · ${distUnit()}`, 'decimal', 'optional') : '');
+}
+
+function loggerHtml(exId, type, d, nSets, canRepeat) {
+  const running = state.timer?.exId === exId;
+  const timerBtn = type === 'weight' ? '' : `<button class="btn block timer-btn ${running ? 'running' : ''}" data-action="timer" data-ex="${exId}">
+      ${running ? `■ ${type === 'time' ? 'Stop &amp; log' : 'Stop'} <span id="sw">${fmtDur((Date.now() - state.timer.start) / 1000)}</span>` : '▶ Start timer'}</button>`;
+  return `<div class="logger" data-scope="${exId}" data-kind="${type}">
+      ${fieldsHtml(type, d)}
+      ${timerBtn}
+      <div class="actions">
+        <button class="btn" data-action="repeat" data-ex="${exId}" ${canRepeat ? '' : 'disabled'}>↻ Repeat</button>
+        <button class="btn primary" data-action="log" data-ex="${exId}">Log set ${nSets + 1}</button>
+      </div>
+    </div>`;
+}
+
+// Prefill: last set this workout → first set of the last session → defaults.
+function draftFor(exId, mine, prev, type) {
   if (state.drafts[exId]) return state.drafts[exId];
   const src = mine[mine.length - 1] || prev?.sets[0];
-  const d = src ? { w: roundTo(dispW(src), unit() === 'kg' ? 0.25 : 0.5), r: src.reps } : { w: 0, r: 8 };
+  let d;
+  if (type === 'weight') d = src && !isTimed(src) ? { w: roundTo(dispW(src), unit() === 'kg' ? 0.25 : 0.5), r: src.reps } : { w: 0, r: 8 };
+  else d = src && isTimed(src) ? { d: src.duration, dist: dispDist(src) } : { d: type === 'time' ? 60 : 20 * 60, dist: 0 };
   state.drafts[exId] = d;
   return d;
 }
 
 function readScope(scopeEl) {
-  return {
-    w: Math.max(0, parseNum($('input[data-field="w"]', scopeEl).value)),
-    r: Math.max(0, Math.round(parseNum($('input[data-field="r"]', scopeEl).value))),
-  };
+  const val = (f) => $(`input[data-field="${f}"]`, scopeEl)?.value;
+  if (val('d') != null) {
+    return {
+      d: parseDur(val('d'), scopeEl.dataset.kind === 'cardio'),
+      dist: Math.max(0, Math.round(parseNum(val('dist') ?? 0) * 100) / 100),
+    };
+  }
+  return { w: Math.max(0, parseNum(val('w'))), r: Math.max(0, Math.round(parseNum(val('r')))) };
 }
 
-async function logSet(exId, w, r) {
-  if (!r) { toast('Enter reps first'); return; }
+const setFromSource = (src) => (isTimed(src) ? { d: src.duration, dist: dispDist(src) } : { w: dispW(src), r: src.reps });
+
+async function logSet(exId, vals) {
+  const timed = 'd' in vals;
+  if (timed ? !vals.d : !vals.r) { toast(timed ? 'Enter a time first' : 'Enter reps first'); return; }
   const wo = await db.get('workouts', state.activeId);
   if (!wo) return;
   const sets = await workoutSets(wo.id);
   const order = sets.filter((s) => s.exerciseId === exId).length;
-  const set = { id: uid(), workoutId: wo.id, exerciseId: exId, weight: w, reps: r, unit: unit(), loggedAt: nowIso(), order };
+  const base = { id: uid(), workoutId: wo.id, exerciseId: exId, unit: unit(), loggedAt: nowIso(), order };
+  const set = timed
+    ? { ...base, weight: 0, reps: 0, duration: vals.d, distance: vals.dist || null, distUnit: distUnit() }
+    : { ...base, weight: vals.w, reps: vals.r };
   await db.put('sets', set);
-  state.drafts[exId] = { w, r };
+  state.drafts[exId] = vals;
   buzz(20);
   await render();
   const row = $(`.set-row[data-set="${set.id}"]`);
@@ -275,13 +306,18 @@ async function openPicker({ focus = true } = {}) {
     };
     const hits = all.map((e) => [score(e), e]).filter(([s]) => s < 9).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).map(([, e]) => e);
     const exact = hits.some((e) => e.name.toLowerCase() === term);
-    const create = exact ? '' : `<button class="btn primary block" data-action="create-ex" style="margin:12px 0">＋ Create “${esc(q.value.trim())}”</button>`;
+    const guess = guessType(q.value);
+    const create = exact ? '' : `<div class="create-box">
+        <div class="small muted">＋ Create “<b style="color:var(--text)">${esc(q.value.trim())}</b>” as…</div>
+        <div class="type-pick">${Object.entries(TYPES).map(([t, label]) =>
+          `<button class="btn ${t === guess ? 'primary' : ''}" data-action="create-ex" data-type="${t}">${label}</button>`).join('')}</div>
+      </div>`;
     results.innerHTML = hits.length ? `<div class="list" style="margin-top:12px">${hits.map(item).join('')}</div>${create}` : create;
   };
   q.addEventListener('input', draw);
   q.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-    ($('#pick-results [data-action="pick"]', sheet) || $('#pick-results [data-action="create-ex"]', sheet))?.click();
+    ($('#pick-results [data-action="pick"]', sheet) || $('#pick-results [data-action="create-ex"].primary', sheet))?.click();
   });
   draw();
 }
@@ -306,10 +342,11 @@ async function openEditSet(setId) {
   openSheet(`
     <h2>${esc(ex?.name || 'Set')}</h2>
     <div class="muted small" style="margin-bottom:12px">Logged ${fmtDay(s.loggedAt)} at ${fmtTime(s.loggedAt)}</div>
-    <div class="logger" data-scope="edit" style="border-radius:14px">
-      ${stepperHtml('w', dispW(s), `Weight · ${unit()}`, 'decimal')}
-      ${stepperHtml('r', s.reps, 'Reps', 'numeric')}
-    </div>
+    ${(() => {
+      const kind = isTimed(s) ? (s.distance || exType(ex) === 'cardio' ? 'cardio' : 'time') : 'weight';
+      const d = isTimed(s) ? { d: s.duration, dist: dispDist(s) } : { w: dispW(s), r: s.reps };
+      return `<div class="logger" data-scope="edit" data-kind="${kind}" style="border-radius:14px">${fieldsHtml(kind, d)}</div>`;
+    })()}
     <div class="stack" style="margin-top:12px">
       <button class="btn primary block" data-action="save-set" data-set="${s.id}">Save</button>
       <button class="btn danger block" data-action="delete-set" data-set="${s.id}">Delete set</button>
@@ -353,7 +390,6 @@ async function finishWorkout(id) {
   if (state.activeId === id) setActive(null);
   state.drafts = {};
   buzz([20, 60, 20]);
-  const volume = sets.reduce((a, s) => a + dispW(s) * s.reps, 0);
   openSheet(`
     <div class="muted" style="text-align:center;margin-top:8px">Workout complete</div>
     <div class="big-num">${dur}</div>
@@ -361,13 +397,46 @@ async function finishWorkout(id) {
     <div class="stats">
       <div class="stat"><div class="k">Exercises</div><div class="v">${exCount}</div></div>
       <div class="stat"><div class="k">Sets</div><div class="v">${sets.length}</div></div>
-      <div class="stat" style="grid-column:span 2"><div class="k">Volume</div><div class="v">${Math.round(volume).toLocaleString()} <small>${unit()}</small></div></div>
+      ${totalsHtml(sets)}
     </div>
-    <div class="stack">
+    ${ratingHtml(wo)}
+    <div class="stack" style="margin-top:20px">
       <a class="btn block" href="#/w/${id}" data-action="close-sheet">View details</a>
       <button class="btn primary block" data-action="close-sheet">Done</button>
     </div>`);
   await render();
+}
+
+// Volume for lifts, total time for timed sets — whichever the workout has.
+function totalsHtml(sets) {
+  const volume = sets.reduce((a, s) => a + (isTimed(s) ? 0 : dispW(s) * s.reps), 0);
+  const secs = sets.reduce((a, s) => a + (isTimed(s) ? s.duration : 0), 0);
+  const dist = sets.reduce((a, s) => a + (isTimed(s) ? dispDist(s) : 0), 0);
+  const tiles = [];
+  if (volume) tiles.push(`<div class="stat"><div class="k">Volume</div><div class="v">${Math.round(volume).toLocaleString()} <small>${unit()}</small></div></div>`);
+  if (secs) tiles.push(`<div class="stat"><div class="k">Timed work</div><div class="v">${fmtDur(secs)}${dist ? ` <small>${fmtNum(Math.round(dist * 100) / 100)} ${distUnit()}</small>` : ''}</div></div>`);
+  if (tiles.length === 1) tiles[0] = tiles[0].replace('class="stat"', 'class="stat" style="grid-column:span 2"');
+  return tiles.join('');
+}
+
+// ---------- effort & feeling ratings ----------
+const effortCaption = (n) => (n ? `${n}/10 · ${EFFORT_LABELS[n]}` : '1 = very easy · 10 = all-out');
+function ratingHtml(w) {
+  return `<div class="rating" data-wid="${w.id}">
+      <h3>Effort</h3>
+      <div class="rate-grid">${Array.from({ length: 10 }, (_, i) => i + 1).map((n) =>
+        `<button class="${w.effort === n ? 'on' : ''}" data-action="rate" data-k="effort" data-v="${n}" aria-label="Effort ${n} of 10">${n}</button>`).join('')}</div>
+      <div class="rate-caption" data-cap="effort">${effortCaption(w.effort)}</div>
+      <h3>How did you feel?</h3>
+      <div class="feel-grid">${FEELINGS.map((f, i) =>
+        `<button class="${w.feeling === i + 1 ? 'on' : ''}" data-action="rate" data-k="feeling" data-v="${i + 1}"><span class="emo">${f.emoji}</span>${f.label}</button>`).join('')}</div>
+    </div>`;
+}
+function ratingLine(w) {
+  const bits = [];
+  if (w.effort) bits.push(`Effort ${w.effort}/10`);
+  if (w.feeling) bits.push(`${FEELINGS[w.feeling - 1].emoji} ${FEELINGS[w.feeling - 1].label}`);
+  return bits.join(' · ');
 }
 
 // ======================================================================
@@ -407,6 +476,7 @@ async function drawHistory() {
         ${w.endedAt ? '' : '<span class="pill">Open</span>'}</div>
         <div class="muted small">${dur} · ${ws.length} set${ws.length === 1 ? '' : 's'} · ${names.length} exercise${names.length === 1 ? '' : 's'}</div>
         <div class="small" style="margin-top:6px;color:var(--text-2)">${shownNames.join(', ') || 'No sets'}</div>
+        ${ratingLine(w) ? `<div class="small muted" style="margin-top:4px">${ratingLine(w)}</div>` : ''}
       </a>`;
   }
   $('#hist-list').innerHTML = shown ? html
@@ -423,7 +493,6 @@ async function viewWorkoutDetail(id) {
     if (!g) groups.push((g = { exId: s.exerciseId, sets: [] }));
     g.sets.push(s);
   });
-  const volume = sets.reduce((a, s) => a + dispW(s) * s.reps, 0);
   const dur = w.endedAt ? fmtDuration(new Date(w.endedAt) - new Date(w.startedAt)) : '—';
   return `<button class="btn ghost" data-action="back" data-fallback="#/history" style="margin-left:-12px">‹ History</button>
     <h1>${new Date(w.startedAt).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h1>
@@ -431,12 +500,13 @@ async function viewWorkoutDetail(id) {
     <div class="stats">
       <div class="stat"><div class="k">Duration</div><div class="v">${dur}</div></div>
       <div class="stat"><div class="k">Sets</div><div class="v">${sets.length}</div></div>
-      <div class="stat" style="grid-column:span 2"><div class="k">Volume</div><div class="v">${Math.round(volume).toLocaleString()} <small>${unit()}</small></div></div>
+      ${totalsHtml(sets)}
     </div>
     ${w.endedAt ? '' : `<button class="btn primary block" data-action="continue" data-id="${w.id}" style="margin-bottom:12px">Continue this workout</button>`}
     ${groups.map((g) => `<div class="ex-card">
         <div class="ex-head"><a class="ex-name linkish" href="#/e/${g.exId}">${esc(ex.get(g.exId)?.name || 'Unknown')} <span class="chev">›</span></a></div>
         <ol class="sets">${g.sets.map((s, i) => setRow(s, i)).join('')}</ol></div>`).join('') || '<div class="empty">No sets in this workout.</div>'}
+    ${w.endedAt ? ratingHtml(w) : ''}
     <h3>Notes</h3>
     <textarea class="notes" id="wo-notes" data-id="${w.id}" placeholder="How did it feel?">${esc(w.notes || '')}</textarea>
     <button class="btn danger block" data-action="delete-workout" data-id="${w.id}" style="margin-top:20px">Delete workout</button>`;
@@ -489,6 +559,9 @@ function openExerciseForm(e = null, presetName = '') {
     <div class="stack">
       <input class="text" id="exf-name" placeholder="Name" value="${esc(e?.name || presetName)}" autocomplete="off">
       <select class="text" id="exf-cat">${CATEGORIES.map((c) => `<option ${((e?.category || 'Other') === c) ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      <div class="small muted">How is a set recorded?</div>
+      <div class="seg" id="exf-type">${Object.entries(TYPES).map(([t, label]) =>
+        `<button class="${(e ? exType(e) : guessType(presetName)) === t ? 'on' : ''}" data-action="pick-type" data-type="${t}">${label}</button>`).join('')}</div>
       <button class="btn primary block" data-action="save-ex" data-id="${e?.id || ''}">Save</button>
       ${e ? `<button class="btn danger block" data-action="delete-ex" data-id="${e.id}">Delete exercise</button>` : ''}
       <button class="btn ghost block" data-action="close-sheet">Cancel</button>
@@ -496,12 +569,12 @@ function openExerciseForm(e = null, presetName = '') {
   $('#exf-name').focus();
 }
 
-async function createExercise(name, category = 'Other') {
+async function createExercise(name, category = 'Other', type = 'weight') {
   name = name.trim().replace(/\s+/g, ' ');
   if (!name) return null;
   const existing = (await db.all('exercises')).find((x) => x.name.toLowerCase() === name.toLowerCase());
   if (existing) return existing;
-  const e = { id: uid(), name, category, createdAt: nowIso() };
+  const e = { id: uid(), name, category, type, createdAt: nowIso() };
   await db.put('exercises', e);
   return e;
 }
@@ -510,31 +583,76 @@ async function viewExercise(id) {
   const e = await db.get('exercises', id);
   if (!e) return `<p class="empty">Exercise not found.</p><a class="btn block" href="#/exercises">All exercises</a>`;
   const sessions = await exerciseSessions(id);
-  const allSets = sessions.flatMap((s) => s.sets);
-  let best = null, bestE = null;
-  allSets.forEach((s) => {
-    const w = dispW(s), v = e1rm(w, s.reps);
-    if (!best || w > dispW(best) || (w === dispW(best) && s.reps > best.reps)) best = s;
-    if (!bestE || v > bestE.v) bestE = { v, s };
-  });
-  const points = sessions.slice().reverse().map((ses) => {
-    const top = ses.sets.reduce((a, s) => (dispW(s) > dispW(a) || (dispW(s) === dispW(a) && s.reps > a.reps) ? s : a));
-    return { t: +new Date(ses.date), date: ses.date, top: dispW(top), topReps: top.reps, e: Math.max(...ses.sets.map((s) => e1rm(dispW(s), s.reps))) };
-  });
-  chartData = points;
+  const type = exType(e);
+  const timedMode = type !== 'weight';
+  // Only the sets that match how this exercise is recorded (in case its type was changed later).
+  const sess = sessions.map((s) => ({ ...s, sets: s.sets.filter((x) => isTimed(x) === timedMode) })).filter((s) => s.sets.length);
+  const allSets = sess.flatMap((s) => s.sets);
+  const chrono = sess.slice().reverse();
+  const round2 = (n) => Math.round(n * 100) / 100;
+  let tiles, note = '', title, chart;
 
+  if (!timedMode) {
+    let best = null, bestE = null;
+    allSets.forEach((s) => {
+      const w = dispW(s), v = e1rm(w, s.reps);
+      if (!best || w > dispW(best) || (w === dispW(best) && s.reps > best.reps)) best = s;
+      if (!bestE || v > bestE.v) bestE = { v, s };
+    });
+    tiles = [
+      ['Best set', best ? esc(fmtSet(best)) : '—'],
+      ['Est. 1RM', bestE ? `${fmtNum(Math.round(bestE.v))} <small>${unit()}</small>` : '—'],
+    ];
+    if (bestE) note = `Est. 1RM uses Epley (weight × (1 + reps/30)), from ${esc(fmtSet(bestE.s))} on ${fmtDate(bestE.s.loggedAt)}.`;
+    title = 'Weight over time';
+    chart = {
+      series: [{ k: 'v1', label: 'Top set' }, { k: 'v2', label: 'Est. 1RM' }],
+      fmt: (v) => fmtNum(Math.round(v)),
+      points: chrono.map((ses) => {
+        const top = ses.sets.reduce((a, s) => (dispW(s) > dispW(a) || (dispW(s) === dispW(a) && s.reps > a.reps) ? s : a));
+        const est = Math.max(...ses.sets.map((s) => e1rm(dispW(s), s.reps)));
+        return { t: +new Date(ses.date), date: ses.date, v1: dispW(top), v2: est, tip: `Top set ${esc(fmtSet(top))}<br>Est. 1RM ${fmtNum(Math.round(est))} ${unit()}` };
+      }),
+    };
+  } else {
+    const hasDist = allSets.some((s) => s.distance);
+    const totalSec = allSets.reduce((a, s) => a + s.duration, 0);
+    if (hasDist) {
+      const far = allSets.reduce((a, s) => (dispDist(s) > dispDist(a) ? s : a));
+      const totalDist = allSets.reduce((a, s) => a + dispDist(s), 0);
+      tiles = [
+        ['Longest', `${fmtNum(dispDist(far))} <small>${distUnit()} · ${fmtDur(far.duration)}</small>`],
+        ['Total', `${fmtNum(round2(totalDist))} <small>${distUnit()} · ${fmtDur(totalSec)}</small>`],
+      ];
+    } else {
+      const longest = allSets.reduce((a, s) => (!a || s.duration > a.duration ? s : a), null);
+      tiles = [['Longest', longest ? fmtDur(longest.duration) : '—'], ['Total time', allSets.length ? fmtDur(totalSec) : '—']];
+    }
+    title = hasDist ? `Distance per session (${distUnit()})` : 'Longest time per session';
+    chart = {
+      series: [{ k: 'v1', label: hasDist ? 'Distance' : 'Longest' }],
+      fmt: hasDist ? (v) => fmtNum(Math.round(v * 10) / 10) : (v) => fmtDur(v * 60),
+      points: chrono.map((ses) => ({
+        t: +new Date(ses.date), date: ses.date,
+        v1: hasDist ? Math.max(...ses.sets.map(dispDist)) : Math.max(...ses.sets.map((s) => s.duration)) / 60,
+        tip: esc(fmtSetsCompact(ses.sets)),
+      })),
+    };
+  }
+  chartState = chart;
+
+  const stat = ([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
   return `<button class="btn ghost" data-action="back" data-fallback="#/exercises" style="margin-left:-12px">‹ Back</button>
     <div class="row"><h1 class="grow">${esc(e.name)}</h1><button class="btn ghost" data-action="edit-ex" data-id="${e.id}">Edit</button></div>
-    <div class="muted">${esc(e.category || 'Other')}</div>
+    <div class="muted">${esc(e.category || 'Other')} · ${TYPES[type]}</div>
     <div class="stats">
-      <div class="stat"><div class="k">Best set</div><div class="v">${best ? esc(fmtSet(best)) : '—'}</div></div>
-      <div class="stat"><div class="k">Est. 1RM</div><div class="v">${bestE ? `${fmtNum(Math.round(bestE.v))} <small>${unit()}</small>` : '—'}</div></div>
-      <div class="stat"><div class="k">Sessions</div><div class="v">${sessions.length}</div></div>
-      <div class="stat"><div class="k">Last done</div><div class="v" style="font-size:20px">${sessions[0] ? fmtDate(sessions[0].date) : '—'}</div></div>
+      ${tiles.map(stat).join('')}
+      ${stat(['Sessions', sess.length])}
+      <div class="stat"><div class="k">Last done</div><div class="v" style="font-size:20px">${sess[0] ? fmtDate(sess[0].date) : '—'}</div></div>
     </div>
-    ${bestE ? `<div class="muted small" style="margin:-4px 0 8px">Est. 1RM uses Epley (weight × (1 + reps/30)), from ${esc(fmtSet(bestE.s))} on ${fmtDate(bestE.s.loggedAt)}.</div>` : ''}
-    <h3>Weight over time</h3>
-    ${points.length >= 2 ? chartHtml(points) : `<div class="card muted small">Log this exercise in at least two workouts to see a chart.</div>`}
+    ${note ? `<div class="muted small" style="margin:-4px 0 8px">${note}</div>` : ''}
+    <h3>${title}</h3>
+    ${chart.points.length >= 2 ? chartHtml(chart) : `<div class="card muted small">Log this exercise in at least two workouts to see a chart.</div>`}
     <h3>Every session</h3>
     ${sessions.length ? `<div class="list">${sessions.map((ses) => `<a class="list-item" href="#/w/${ses.workoutId}">
         <span class="grow"><b>${fmtDay(ses.date)}</b> <span class="muted small">${fmtTime(ses.date)}</span>
@@ -542,9 +660,9 @@ async function viewExercise(id) {
       : `<div class="empty">Not logged yet.</div>`}`;
 }
 
-// ---------- chart (inline SVG, two series on one axis: top-set weight & est. 1RM) ----------
-let chartData = [];
-const CH = { w: 340, h: 190, l: 38, r: 44, t: 12, b: 24 };
+// ---------- chart (inline SVG; one axis; one or two series) ----------
+let chartState = null;
+const CH = { w: 340, h: 190, l: 40, r: 46, t: 12, b: 24 };
 function niceTicks(min, max, count = 4) {
   const span = max - min || 1;
   const step0 = span / count;
@@ -555,8 +673,8 @@ function niceTicks(min, max, count = 4) {
   for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 100) / 100);
   return ticks;
 }
-function chartScales(points) {
-  const ys = points.flatMap((p) => [p.top, p.e]);
+function chartScales({ points, series }) {
+  const ys = points.flatMap((p) => series.map((s) => p[s.k]));
   const ticks = niceTicks(Math.min(...ys), Math.max(...ys));
   const y0 = ticks[0], y1 = ticks[ticks.length - 1];
   const t0 = points[0].t, t1 = points[points.length - 1].t;
@@ -564,27 +682,27 @@ function chartScales(points) {
   const y = (v) => CH.t + (1 - (v - y0) / (y1 - y0 || 1)) * (CH.h - CH.t - CH.b);
   return { x, y, ticks };
 }
-function chartHtml(points) {
-  const { x, y, ticks } = chartScales(points);
+function chartHtml(ch) {
+  const { points, series, fmt } = ch;
+  const { x, y, ticks } = chartScales(ch);
   const path = (k) => points.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p[k]).toFixed(1)}`).join('');
   const last = points[points.length - 1];
   const showDots = points.length <= 24;
-  // Keep the two end labels from colliding.
-  let ly1 = y(last.top), ly2 = y(last.e);
-  if (Math.abs(ly1 - ly2) < 14) { const mid = (ly1 + ly2) / 2; ly2 = mid - 7; ly1 = mid + 7; }
+  // End labels, nudged apart if two series finish close together.
+  const ly = series.map((s) => y(last[s.k]));
+  if (ly.length === 2 && Math.abs(ly[0] - ly[1]) < 14) { const mid = (ly[0] + ly[1]) / 2; const up = ly[1] < ly[0] ? 1 : 0; ly[up] = mid - 7; ly[1 - up] = mid + 7; }
+  const drawOrder = series.map((s, i) => ({ ...s, n: i + 1 })).reverse(); // series 1 on top
   return `<div class="chart" id="chart">
-    <div class="legend"><span><i style="background:var(--series-1)"></i>Top set</span><span><i style="background:var(--series-2)"></i>Est. 1RM</span></div>
-    <svg viewBox="0 0 ${CH.w} ${CH.h}" role="img" aria-label="Top set weight and estimated 1RM per session">
+    ${series.length > 1 ? `<div class="legend">${series.map((s, i) => `<span><i style="background:var(--series-${i + 1})"></i>${s.label}</span>`).join('')}</div>` : ''}
+    <svg viewBox="0 0 ${CH.w} ${CH.h}" role="img" aria-label="${series.map((s) => s.label).join(' and ')} per session">
       <g class="grid">${ticks.map((v) => `<line x1="${CH.l}" x2="${CH.w - CH.r}" y1="${y(v)}" y2="${y(v)}"/>`).join('')}</g>
-      <g class="axis">${ticks.map((v) => `<text x="${CH.l - 6}" y="${y(v) + 4}" text-anchor="end">${fmtNum(v)}</text>`).join('')}
+      <g class="axis">${ticks.map((v) => `<text x="${CH.l - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join('')}
         <text x="${CH.l}" y="${CH.h - 4}">${fmtDate(points[0].date)}</text>
         <text x="${CH.w - CH.r}" y="${CH.h - 4}" text-anchor="end">${fmtDate(last.date)}</text></g>
       <line id="ch-x" y1="${CH.t}" y2="${CH.h - CH.b}" stroke="var(--muted)" stroke-width="1" style="display:none"/>
-      <path class="s2" d="${path('e')}" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-      <path class="s1" d="${path('top')}" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-      ${showDots ? points.map((p) => `<circle class="dot2" cx="${x(p.t)}" cy="${y(p.e)}" r="4"/><circle class="dot1" cx="${x(p.t)}" cy="${y(p.top)}" r="4"/>`).join('') : ''}
-      <text class="lbl" x="${CH.w - CH.r + 6}" y="${ly1 + 4}">${fmtNum(Math.round(last.top))}</text>
-      <text class="lbl" x="${CH.w - CH.r + 6}" y="${ly2 + 4}">${fmtNum(Math.round(last.e))}</text>
+      ${drawOrder.map((s) => `<path class="s${s.n}" d="${path(s.k)}" fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`).join('')}
+      ${showDots ? points.map((p) => drawOrder.map((s) => `<circle class="dot${s.n}" cx="${x(p.t)}" cy="${y(p[s.k])}" r="4"/>`).join('')).join('') : ''}
+      ${series.map((s, i) => `<text class="lbl" x="${CH.w - CH.r + 6}" y="${ly[i] + 4}">${fmt(last[s.k])}</text>`).join('')}
       <rect id="ch-hit" x="0" y="0" width="${CH.w}" height="${CH.h}" fill="transparent"/>
     </svg>
     <div class="tip" id="ch-tip"></div>
@@ -592,19 +710,19 @@ function chartHtml(points) {
 }
 afterRender.e = () => {
   const box = $('#chart');
-  if (!box) return;
+  if (!box || !chartState) return;
   const svg = $('svg', box), tip = $('#ch-tip'), cross = $('#ch-x');
-  const { x, y } = chartScales(chartData);
+  const { points, series } = chartState;
+  const { x, y } = chartScales(chartState);
   const show = (ev) => {
     const r = svg.getBoundingClientRect();
     const sx = ((ev.clientX - r.left) / r.width) * CH.w;
-    const p = chartData.reduce((a, b) => (Math.abs(x(b.t) - sx) < Math.abs(x(a.t) - sx) ? b : a));
+    const p = points.reduce((a, b) => (Math.abs(x(b.t) - sx) < Math.abs(x(a.t) - sx) ? b : a));
     cross.setAttribute('x1', x(p.t)); cross.setAttribute('x2', x(p.t)); cross.style.display = '';
-    tip.innerHTML = `<b>${fmtDay(p.date)}</b>Top set ${fmtW(p.top)} × ${p.topReps}<br>Est. 1RM ${fmtNum(Math.round(p.e))} ${unit()}`;
+    tip.innerHTML = `<b>${fmtDay(p.date)}</b>${p.tip}`;
     const scale = r.width / CH.w;
-    const left = Math.min(Math.max(x(p.t) * scale + 8, 70), r.width - 62);
-    tip.style.left = `${left}px`;
-    tip.style.top = `${Math.min(y(p.top), y(p.e)) * scale + 30}px`;
+    tip.style.left = `${Math.min(Math.max(x(p.t) * scale + 8, 70), r.width - 62)}px`;
+    tip.style.top = `${Math.min(...series.map((s) => y(p[s.k]))) * scale + 30}px`;
     tip.style.display = 'block';
   };
   const hide = () => { tip.style.display = 'none'; cross.style.display = 'none'; };
@@ -685,8 +803,9 @@ const actions = {
   'finish-other': (el) => finishWorkout(el.dataset.id),
   'add-ex': () => openPicker(),
   pick: (el) => addToWorkout(el.dataset.ex),
-  'create-ex': async () => {
-    const e = await createExercise($('#pick-q').value);
+  'create-ex': async (el) => {
+    const name = $('#pick-q').value, type = el.dataset.type || 'weight';
+    const e = await createExercise(name, guessType(name) === 'cardio' ? 'Cardio' : 'Other', type);
     if (e) { toast(`Added “${e.name}”`); addToWorkout(e.id); }
   },
   focus: (el) => { state.focusEx = el.dataset.ex; render(); },
@@ -699,30 +818,71 @@ const actions = {
   },
   step: (el) => {
     const scope = el.closest('[data-scope]');
-    const input = $(`input[data-field="${el.dataset.field}"]`, scope);
-    const isW = el.dataset.field === 'w';
-    const next = Math.max(0, parseNum(input.value) + Number(el.dataset.dir) * (isW ? weightStep() : 1));
-    input.value = fmtNum(Math.round(next * 100) / 100);
+    const f = el.dataset.field, dir = Number(el.dataset.dir);
+    const input = $(`input[data-field="${f}"]`, scope);
+    if (f === 'd') {
+      const stepS = scope.dataset.kind === 'cardio' ? 60 : 15;
+      const cur = parseDur(input.value, scope.dataset.kind === 'cardio');
+      input.value = fmtDur(Math.max(0, roundTo(cur, stepS) + dir * stepS));
+    } else {
+      const stepV = f === 'w' ? weightStep() : f === 'dist' ? 0.1 : 1;
+      const next = Math.max(0, parseNum(input.value) + dir * stepV);
+      input.value = fmtNum(Math.round(next * 100) / 100);
+    }
     if (scope.dataset.scope !== 'edit') state.drafts[scope.dataset.scope] = readScope(scope);
     buzz(5);
   },
-  log: (el) => { const d = readScope(el.closest('[data-scope]')); logSet(el.dataset.ex, d.w, d.r); },
+  log: (el) => logSet(el.dataset.ex, readScope(el.closest('[data-scope]'))),
   repeat: async (el) => {
     const exId = el.dataset.ex;
     const mine = (await workoutSets(state.activeId)).filter((s) => s.exerciseId === exId);
     const src = mine[mine.length - 1] || (await exerciseSessions(exId)).find((h) => h.workoutId !== state.activeId)?.sets[0];
-    if (src) logSet(exId, dispW(src), src.reps);
+    if (src) logSet(exId, setFromSource(src));
   },
+  timer: async (el) => {
+    const exId = el.dataset.ex;
+    if (state.timer?.exId === exId) {
+      const secs = Math.round((Date.now() - state.timer.start) / 1000);
+      state.timer = null;
+      const scope = el.closest('[data-scope]');
+      if (scope.dataset.kind === 'time' && secs >= 1) { await logSet(exId, { d: secs, dist: 0 }); return; }
+      state.drafts[exId] = { ...readScope(scope), d: secs }; // cardio: fill time, then add distance and log
+      buzz(15);
+      return render();
+    }
+    state.timer = { exId, start: Date.now() };
+    buzz(15);
+    render();
+  },
+  rate: async (el) => {
+    const box = el.closest('.rating');
+    const w = await db.get('workouts', box.dataset.wid);
+    if (!w) return;
+    const k = el.dataset.k, v = Number(el.dataset.v);
+    w[k] = w[k] === v ? null : v; // tap again to clear
+    await db.put('workouts', w);
+    box.querySelectorAll(`[data-k="${k}"]`).forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === w[k]));
+    if (k === 'effort') $('[data-cap="effort"]', box).textContent = effortCaption(w.effort);
+    buzz(8);
+    if (box.closest('.sheet')) render(); // refresh cards behind the summary sheet
+  },
+  'pick-type': (el) => el.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el)),
   'edit-set': (el) => { if (!swipe.suppressClick) openEditSet(el.dataset.set); },
   'save-set': async (el) => {
     const s = await db.get('sets', el.dataset.set);
     const d = readScope($('[data-scope="edit"]'));
-    if (!d.r) return toast('Reps must be at least 1');
-    // Store in the current unit unless unchanged (avoid rounding drift).
-    if (Math.abs(d.w - dispW(s)) > 0.001) { s.weight = d.w; s.unit = unit(); }
-    s.reps = d.r;
+    if (isTimed(s)) {
+      if (!d.d) return toast('Time must be more than 0');
+      s.duration = d.d;
+      // Store distance in the current unit only if it changed (avoid rounding drift).
+      if (Math.abs(d.dist - dispDist(s)) > 0.001) { s.distance = d.dist || null; s.distUnit = distUnit(); }
+    } else {
+      if (!d.r) return toast('Reps must be at least 1');
+      if (Math.abs(d.w - dispW(s)) > 0.001) { s.weight = d.w; s.unit = unit(); }
+      s.reps = d.r;
+    }
     await db.put('sets', s);
-    if (s.workoutId === state.activeId) state.drafts[s.exerciseId] = { w: dispW(s), r: s.reps };
+    if (s.workoutId === state.activeId) state.drafts[s.exerciseId] = setFromSource(s);
     closeSheet(); buzz(10); render();
   },
   'delete-set': (el) => removeSet(el.dataset.set),
@@ -739,12 +899,14 @@ const actions = {
   'edit-ex': async (el) => openExerciseForm(await db.get('exercises', el.dataset.id)),
   'save-ex': async (el) => {
     const name = $('#exf-name').value.trim(), category = $('#exf-cat').value;
+    const type = $('#exf-type .on')?.dataset.type || 'weight';
     if (!name) return toast('Give it a name');
     if (el.dataset.id) {
       const e = await db.get('exercises', el.dataset.id);
-      await db.put('exercises', { ...e, name, category });
+      await db.put('exercises', { ...e, name, category, type });
+      delete state.drafts[e.id];
     } else {
-      await createExercise(name, category);
+      await createExercise(name, category, type);
       state.exFilter = '';
     }
     closeSheet(); toast('Saved'); render();
@@ -853,12 +1015,14 @@ function tick() {
   if (t) t.textContent = fmtClock(Date.now() - new Date(t.dataset.start));
   const s = $('#since');
   if (s?.dataset.last) s.textContent = `last set ${fmtClock(Date.now() - new Date(s.dataset.last))} ago`;
+  const sw = $('#sw');
+  if (sw && state.timer) sw.textContent = fmtDur((Date.now() - state.timer.start) / 1000);
 }
 setInterval(tick, 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 
 // ---------- boot ----------
-window.addEventListener('hashchange', () => { closeSheet(); render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { closeSheet(); render(); view().scrollTop = 0; });
 
 async function boot() {
   await ensureSeed();
